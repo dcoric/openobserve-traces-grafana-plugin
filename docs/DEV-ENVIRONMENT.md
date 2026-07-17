@@ -34,7 +34,20 @@ npm run server               # docker compose up --build
 
 Bring-up order is dependency-gated: rustfs (healthy) → rustfs-init creates the
 bucket (must complete) → openobserve (healthy) → otel-collector + grafana →
-seed runs once and exits after pushing ~200 traces spread over the last hour.
+seed runs once and exits after pushing ~200 normal traces plus one deterministic
+large trace (5,001 spans by default) spread over the last hour.
+
+All published ports bind to `127.0.0.1` by default, including Grafana's HTTP
+and delve ports. To expose the stack to another machine, opt in explicitly:
+
+```bash
+DEV_BIND_ADDRESS=0.0.0.0 docker compose up --build
+```
+
+Security warning: `0.0.0.0` exposes unauthenticated dev Grafana and the fixed
+development OpenObserve/RustFS credentials to every reachable interface. Use
+it only on a trusted, firewalled network and prefer an SSH tunnel for remote
+access.
 
 ## URLs & credentials
 
@@ -58,20 +71,33 @@ The seed service runs automatically on `up`. Re-seed any time:
 docker compose run --rm seed                       # another 200 traces, last 60 min
 docker compose run --rm -e TRACE_COUNT=1000 -e TIME_SPREAD_MINUTES=360 seed
 npm run seed                                       # same, from the host (Node >= 18)
+docker compose run --rm -e LARGE_TRACE_SPAN_COUNT=5001 seed  # truncation case
 ```
 
 Generator knobs (env): `TRACE_COUNT` (200), `TIME_SPREAD_MINUTES` (60),
-`ERROR_RATE` (0.08), `SEED` (fix it for reproducible traces, e.g. e2e
-fixtures), `OTLP_HTTP_ENDPOINT` (defaults to `http://localhost:4318` on the
-host). Compose-level defaults can be set via `SEED_TRACE_COUNT`,
-`SEED_TIME_SPREAD_MINUTES`, `SEED_ERROR_RATE`.
+`ERROR_RATE` (0.08), `SEED_RANDOM_SEED` (compose default 1; `SEED` remains a
+legacy alias), `LARGE_TRACE_SPAN_COUNT` (compose default 5001; set to 0 to
+disable), and optional `REFERENCE_TIME_MS` for repeatable timestamps.
+`OTLP_HTTP_ENDPOINT` defaults to `http://localhost:4318` on the host.
+Compose-level defaults can be set via `SEED_TRACE_COUNT`,
+`SEED_TIME_SPREAD_MINUTES`, `SEED_ERROR_RATE`, `SEED_RANDOM_SEED`, and
+`LARGE_TRACE_SPAN_COUNT`. The seed logs the large trace ID and span count so it
+can be pasted into Grafana's Trace ID search.
 
-The simulated system is a small shop: `web-frontend → api-gateway →
-product/cart/user/payment/inventory services → postgres/redis`, plus an async
-`order-processor` whose traces **link** back to the checkout trace's PRODUCER
-span. ~8% of traces fail with ERROR status + `exception` events. This
-exercises the waterfall, node graph, span logs (events), references (links),
-kind icons, and search filters.
+Re-running the compose seed with the same fixed seed reuses trace IDs at new
+timestamps. Use a different `SEED_RANDOM_SEED`, or reset the volumes, when a
+clean one-trace-per-ID dataset matters.
+
+The simulated system is a small shop with eight resource services:
+`web-frontend → api-gateway → product/cart/user/payment/inventory services`,
+plus an async `order-processor` whose traces **link** back to the checkout
+trace's PRODUCER span. Database and cache CLIENT spans remain children of the
+calling resource service; their `net.peer.name` values identify postgres or
+redis endpoints, which are not emitted as fake resource services. ~8% of
+traces fail with ERROR status + `exception` events. This exercises the
+waterfall, node graph, span logs (events), references (links), kind icons, and
+search filters. The large-trace scenario reuses `product-service` and
+marks every span with `dev.scenario=large-trace`.
 
 Keep `TIME_SPREAD_MINUTES` well below o2's backdated-ingest window
 (`ZO_INGEST_ALLOWED_UPTO`, set to 24h in compose; o2 default is 5h) — spans

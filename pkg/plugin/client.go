@@ -65,9 +65,20 @@ type SearchResponse struct {
 }
 
 // Warning returns a human-readable message if the search succeeded (HTTP 200)
-// but returned a partial or function-errored result, else "".
+// but returned a partial, function-errored, or truncated result, else "".
 func (sr *SearchResponse) Warning() string {
+	return sr.warning(true)
+}
+
+func (sr *SearchResponse) searchWarning() string {
+	return sr.warning(false)
+}
+
+func (sr *SearchResponse) warning(includeTraceTruncation bool) string {
 	var msgs []string
+	if includeTraceTruncation && sr.Total > len(sr.Hits) {
+		msgs = append(msgs, fmt.Sprintf("OpenObserve returned %d of %d spans; trace truncated", len(sr.Hits), sr.Total))
+	}
 	if sr.IsPartial {
 		msgs = append(msgs, "OpenObserve returned a partial result; the query may have been truncated (try a smaller time range)")
 	}

@@ -102,6 +102,10 @@ func (d *Datasource) querySearch(ctx context.Context, query backend.DataQuery, q
 	if limit <= 0 {
 		limit = defaultSearchLimit
 	}
+	if limit > maxSearchLimit {
+		return backend.ErrDataResponse(backend.StatusBadRequest,
+			fmt.Sprintf("search limit %d exceeds maximum %d", limit, maxSearchLimit))
+	}
 	sql := buildSearchSQL(stream, filters, having, limit)
 
 	from := query.TimeRange.From.UnixMicro()
@@ -114,7 +118,7 @@ func (d *Datasource) querySearch(ctx context.Context, query backend.DataQuery, q
 
 	var r backend.DataResponse
 	frame := buildSearchTableFrame(resp.Hits, stream, d.uid, d.name, sql)
-	attachWarning(frame, resp.Warning())
+	attachWarning(frame, resp.searchWarning())
 	r.Frames = append(r.Frames, frame)
 	return r
 }
@@ -136,11 +140,15 @@ func (d *Datasource) queryTraceByID(ctx context.Context, query backend.DataQuery
 
 	var r backend.DataResponse
 	traceFrame := buildTraceFrame(resp.Hits, sql)
-	attachWarning(traceFrame, resp.Warning())
+	warning := resp.Warning()
+	attachWarning(traceFrame, warning)
 	r.Frames = append(r.Frames, traceFrame)
 
 	if (d.settings.NodeGraph || qm.NodeGraph) && len(resp.Hits) > 0 {
-		r.Frames = append(r.Frames, buildNodeGraphFrames(resp.Hits)...)
+		for _, frame := range buildNodeGraphFrames(resp.Hits) {
+			attachWarning(frame, warning)
+			r.Frames = append(r.Frames, frame)
+		}
 	}
 	return r
 }

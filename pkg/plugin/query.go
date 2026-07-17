@@ -2,6 +2,8 @@ package plugin
 
 import (
 	"fmt"
+	"math"
+	"math/big"
 	"regexp"
 	"strconv"
 	"strings"
@@ -21,6 +23,10 @@ const maxSpansPerTrace = 5000
 // defaultSearchLimit is the number of traces returned by a search when the
 // query does not specify a limit.
 const defaultSearchLimit = 50
+
+// maxSearchLimit is the largest page a trace search may request. The
+// datasource query path owns enforcing this contract when it chooses a limit.
+const maxSearchLimit = 500
 
 // tagFilter is a structured attribute filter from the search builder.
 type tagFilter struct {
@@ -43,7 +49,6 @@ type queryModel struct {
 	MinDuration string      `json:"minDuration"` // e.g. "1.5ms", "100us"
 	MaxDuration string      `json:"maxDuration"`
 	Tags        []tagFilter `json:"tags"`
-	RawWhere    string      `json:"rawWhere"` // advanced: appended verbatim
 	Limit       int         `json:"limit"`
 
 	// Stream override; falls back to the datasource default stream.
@@ -54,9 +59,9 @@ type queryModel struct {
 	NodeGraph bool `json:"nodeGraph"`
 }
 
-// hexID matches OpenObserve trace/span ids: hex, optionally with dashes
-// (UUID-style ids are accepted too).
-var hexID = regexp.MustCompile(`^[0-9a-fA-F-]{1,64}$`)
+// hexID matches the OpenTelemetry trace-id invariant: exactly 32 hexadecimal
+// characters, with no separators.
+var hexID = regexp.MustCompile(`^[0-9a-fA-F]{32}$`)
 
 // validateTraceID guards against SQL injection before a trace id is
 // interpolated into SQL. OpenObserve trace ids are 32 hex chars.
@@ -67,6 +72,9 @@ func validateTraceID(id string) (string, error) {
 	}
 	if !hexID.MatchString(id) {
 		return "", fmt.Errorf("invalid trace id %q: must be hexadecimal", id)
+	}
+	if strings.Trim(id, "0") == "" {
+		return "", fmt.Errorf("invalid trace id %q: must contain a non-zero hexadecimal byte", id)
 	}
 	return id, nil
 }
@@ -95,18 +103,19 @@ func buildTraceDetailSQL(stream, traceID string) string {
 }
 
 // buildSearchSQL builds the GROUP BY trace_id aggregation that powers the
-// search results table. It mirrors OpenObserve's own traces/latest query but
-// keeps to columns that always exist (no reference_parent_span_id dependency),
-// using the earliest span for the trace's name/service. Duration bounds are
-// applied via HAVING (trace-level), other filters via WHERE.
+// search results table. Span predicates are conditional aggregate predicates:
+// they select traces while retaining every span in each selected trace. The
+// predicates are combined inside one CASE expression so all filters match the
+// same span. Duration bounds are trace-level HAVING predicates.
 func buildSearchSQL(stream string, filters, having []string, limit int) string {
-	where := ""
-	if len(filters) > 0 {
-		where = " WHERE " + strings.Join(filters, " AND ")
-	}
 	havingClause := ""
-	if len(having) > 0 {
-		havingClause = " HAVING " + strings.Join(having, " AND ")
+	clauses := make([]string, 0, len(having)+1)
+	if len(filters) > 0 {
+		clauses = append(clauses, "sum(CASE WHEN "+strings.Join(filters, " AND ")+" THEN 1 ELSE 0 END) > 0")
+	}
+	clauses = append(clauses, having...)
+	if len(clauses) > 0 {
+		havingClause = " HAVING " + strings.Join(clauses, " AND ")
 	}
 	_ = limit // size is passed via the request body, not the SQL
 	return fmt.Sprintf(`SELECT trace_id, `+
@@ -115,12 +124,12 @@ func buildSearchSQL(stream string, filters, having []string, limit int) string {
 		`max(end_time) AS trace_end_time, `+
 		`count(*) AS span_count, `+
 		`sum(CASE WHEN span_status = 'ERROR' THEN 1 ELSE 0 END) AS error_count, `+
-		`max(duration) AS max_duration, `+
+		`max(end_time) - min(start_time) AS trace_duration, `+
 		`count(DISTINCT service_name) AS service_count, `+
 		`first_value(service_name ORDER BY start_time ASC) AS first_service_name, `+
 		`first_value(operation_name ORDER BY start_time ASC) AS first_operation_name `+
-		`FROM %s%s GROUP BY trace_id%s ORDER BY zo_sql_timestamp DESC`,
-		quoteStream(stream), where, havingClause)
+		`FROM %s GROUP BY trace_id%s ORDER BY zo_sql_timestamp DESC`,
+		quoteStream(stream), havingClause)
 }
 
 // quoteStream wraps the stream name in double quotes, stripping unsafe chars.
@@ -128,10 +137,11 @@ func quoteStream(stream string) string {
 	return `"` + sqlIdent(stream) + `"`
 }
 
-// buildSearchFilters translates the structured query builder into SQL WHERE
-// predicates. All string values are quoted/escaped; raw WHERE is passed through
-// (an advanced escape hatch that runs with the user's own OpenObserve
-// credentials). Duration bounds are handled separately in buildSearchHaving.
+// buildSearchFilters translates the structured query builder into SQL span
+// predicates. They are consumed by buildSearchSQL inside a conditional
+// aggregate HAVING expression, never as a row-level WHERE clause. All string
+// values are quoted/escaped. Duration bounds are handled separately in
+// buildSearchHaving.
 func buildSearchFilters(q *queryModel) []string {
 	var filters []string
 
@@ -151,16 +161,14 @@ func buildSearchFilters(q *queryModel) []string {
 		}
 		filters = append(filters, key+" = "+sqlQuote(t.Value))
 	}
-	if s := strings.TrimSpace(q.RawWhere); s != "" {
-		filters = append(filters, "("+s+")")
-	}
 	return filters
 }
 
-// buildSearchHaving builds the trace-level duration bounds. They are applied via
-// HAVING (after GROUP BY trace_id) on max(duration), so they bound the trace as
-// a whole rather than filtering individual span rows out of the aggregation.
-// max(duration) is in microseconds, matching the parsed threshold unit.
+const traceDurationExpression = "(max(end_time) - min(start_time))"
+
+// buildSearchHaving builds trace-level wall-clock duration bounds. OpenObserve
+// stores start/end timestamps in nanoseconds while duration query values are
+// parsed as microseconds, so thresholds are converted before comparison.
 func buildSearchHaving(q *queryModel) ([]string, error) {
 	var having []string
 	if s := strings.TrimSpace(q.MinDuration); s != "" {
@@ -168,16 +176,31 @@ func buildSearchHaving(q *queryModel) ([]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("min duration: %w", err)
 		}
-		having = append(having, "max(duration) >= "+strconv.FormatInt(micros, 10))
+		nanos, err := durationMicrosToNanos(micros)
+		if err != nil {
+			return nil, fmt.Errorf("min duration: %w", err)
+		}
+		having = append(having, traceDurationExpression+" >= "+strconv.FormatInt(nanos, 10))
 	}
 	if s := strings.TrimSpace(q.MaxDuration); s != "" {
 		micros, err := parseDurationMicros(s)
 		if err != nil {
 			return nil, fmt.Errorf("max duration: %w", err)
 		}
-		having = append(having, "max(duration) <= "+strconv.FormatInt(micros, 10))
+		nanos, err := durationMicrosToNanos(micros)
+		if err != nil {
+			return nil, fmt.Errorf("max duration: %w", err)
+		}
+		having = append(having, traceDurationExpression+" <= "+strconv.FormatInt(nanos, 10))
 	}
 	return having, nil
+}
+
+func durationMicrosToNanos(micros int64) (int64, error) {
+	if micros < 0 || micros > math.MaxInt64/1000 {
+		return 0, fmt.Errorf("duration %d microseconds exceeds the supported nanoseconds range", micros)
+	}
+	return micros * 1000, nil
 }
 
 var durationRe = regexp.MustCompile(`^\s*([0-9]*\.?[0-9]+)\s*(ns|us|µs|ms|s|m|h)?\s*$`)
@@ -190,26 +213,30 @@ func parseDurationMicros(s string) (int64, error) {
 	if m == nil {
 		return 0, fmt.Errorf("invalid duration %q", s)
 	}
-	val, err := strconv.ParseFloat(m[1], 64)
-	if err != nil {
-		return 0, fmt.Errorf("invalid duration %q: %w", s, err)
+	val, ok := new(big.Rat).SetString(m[1])
+	if !ok {
+		return 0, fmt.Errorf("invalid duration %q", s)
 	}
-	var micros float64
+	var scaleNumerator, scaleDenominator int64 = 1, 1
 	switch m[2] {
 	case "ns":
-		micros = val / 1000
+		scaleDenominator = 1000
 	case "us", "µs", "":
-		micros = val
 	case "ms":
-		micros = val * 1000
+		scaleNumerator = 1000
 	case "s":
-		micros = val * 1_000_000
+		scaleNumerator = 1_000_000
 	case "m":
-		micros = val * 60 * 1_000_000
+		scaleNumerator = 60 * 1_000_000
 	case "h":
-		micros = val * 3600 * 1_000_000
+		scaleNumerator = 3600 * 1_000_000
 	default:
 		return 0, fmt.Errorf("unknown duration unit in %q", s)
 	}
-	return int64(micros), nil
+	micros := new(big.Rat).Mul(val, big.NewRat(scaleNumerator, scaleDenominator))
+	if micros.Cmp(new(big.Rat).SetInt64(math.MaxInt64)) > 0 {
+		return 0, fmt.Errorf("invalid duration %q: exceeds supported microsecond range", s)
+	}
+	whole := new(big.Int).Quo(micros.Num(), micros.Denom())
+	return whole.Int64(), nil
 }

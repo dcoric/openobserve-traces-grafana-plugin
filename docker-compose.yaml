@@ -6,11 +6,22 @@
 #
 # See docs/DEV-ENVIRONMENT.md for usage, credentials, and troubleshooting.
 # Versions are pinned; bump deliberately (o2 must eventually match GR's).
+x-dev-bind-address: &dev-bind-address ${DEV_BIND_ADDRESS:-127.0.0.1}
+
 services:
   grafana:
     extends:
       file: .config/docker-compose-base.yaml
       service: grafana
+    ports: !override
+      - target: 3000
+        published: '3000'
+        host_ip: *dev-bind-address
+        protocol: tcp
+      - target: 2345
+        published: '2345'
+        host_ip: *dev-bind-address
+        protocol: tcp
     depends_on:
       openobserve:
         condition: service_healthy
@@ -26,8 +37,14 @@ services:
       RUSTFS_VOLUMES: /data
       RUSTFS_REGION: us-east-1
     ports:
-      - '9000:9000' # S3 API
-      - '9001:9001' # web console (login: openobserve-access / openobserve-secret)
+      - target: 9000
+        published: '9000'
+        host_ip: *dev-bind-address
+        protocol: tcp # S3 API
+      - target: 9001
+        published: '9001'
+        host_ip: *dev-bind-address
+        protocol: tcp # web console (login: openobserve-access / openobserve-secret)
     volumes:
       # Named volume: the container runs as 10001:10001, bind mounts would
       # need a manual chown.
@@ -76,8 +93,14 @@ services:
       # into the past, and o2 silently drops spans outside this window.
       ZO_INGEST_ALLOWED_UPTO: '24'
     ports:
-      - '5080:5080' # HTTP: UI, REST API, OTLP/HTTP
-      - '5081:5081' # gRPC: OTLP/gRPC
+      - target: 5080
+        published: '5080'
+        host_ip: *dev-bind-address
+        protocol: tcp # HTTP: UI, REST API, OTLP/HTTP
+      - target: 5081
+        published: '5081'
+        host_ip: *dev-bind-address
+        protocol: tcp # gRPC: OTLP/gRPC
     volumes:
       - openobserve-data:/data
     healthcheck:
@@ -97,8 +120,14 @@ services:
     volumes:
       - ./dev/otel-collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro
     ports:
-      - '4317:4317' # OTLP gRPC (host apps can point here too)
-      - '4318:4318' # OTLP HTTP
+      - target: 4317
+        published: '4317'
+        host_ip: *dev-bind-address
+        protocol: tcp # OTLP gRPC (host apps can point here too)
+      - target: 4318
+        published: '4318'
+        host_ip: *dev-bind-address
+        protocol: tcp # OTLP HTTP
     # No healthcheck: the image is FROM scratch (no shell/curl). Its exporter
     # retries failed deliveries for up to 5 min, so ordering is forgiving.
 
@@ -116,6 +145,8 @@ services:
       TRACE_COUNT: ${SEED_TRACE_COUNT:-200}
       TIME_SPREAD_MINUTES: ${SEED_TIME_SPREAD_MINUTES:-60}
       ERROR_RATE: ${SEED_ERROR_RATE:-0.08}
+      SEED_RANDOM_SEED: ${SEED_RANDOM_SEED:-1}
+      LARGE_TRACE_SPAN_COUNT: ${LARGE_TRACE_SPAN_COUNT:-5001}
     volumes:
       - ./dev/seed:/seed:ro
     command: ['node', '/seed/generate-traces.mjs']

@@ -1,31 +1,37 @@
-import { test, expect } from '@grafana/plugin-e2e';
-import { MyDataSourceOptions, MySecureJsonData } from '../src/types';
+import { expect, test } from '@grafana/plugin-e2e';
 
-test('smoke: should render config editor', async ({ createDataSourceConfigPage, readProvisionedDataSource, page }) => {
-  const ds = await readProvisionedDataSource({ fileName: 'datasources.yml' });
-  await createDataSourceConfigPage({ type: ds.type });
-  await expect(page.getByLabel('Path')).toBeVisible();
-});
-test('"Save & test" should be successful when configuration is valid', async ({
+test('datasource configuration exposes the supported settings and saves', async ({
   createDataSourceConfigPage,
-  readProvisionedDataSource,
   page,
+  readProvisionedDataSource,
 }) => {
-  const ds = await readProvisionedDataSource<MyDataSourceOptions, MySecureJsonData>({ fileName: 'datasources.yml' });
-  const configPage = await createDataSourceConfigPage({ type: ds.type });
-  await page.getByRole('textbox', { name: 'Path' }).fill(ds.jsonData.path ?? '');
-  await page.getByRole('textbox', { name: 'API Key' }).fill(ds.secureJsonData?.apiKey ?? '');
+  const provisioned = await readProvisionedDataSource({ fileName: 'datasources.yml' });
+  const configPage = await createDataSourceConfigPage({ type: provisioned.type });
+
+  const basicAuth = page.getByRole('switch', { name: /Basic auth/i });
+  if ((await basicAuth.isVisible()) && !(await basicAuth.isChecked())) {
+    await basicAuth.check({ force: true });
+  }
+
+  await expect(page.getByRole('textbox', { name: /^URL/ })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Organization', exact: true })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'User', exact: true })).toBeVisible();
+  const passwordLabel = page.locator('label').filter({ hasText: /^Password$/ });
+  await expect(passwordLabel).toHaveCount(1);
+  await expect(passwordLabel).toBeVisible();
+  const passwordInput = passwordLabel.locator('..').getByRole('textbox');
+  await expect(passwordInput).toHaveCount(1);
+  await expect(passwordInput).toBeVisible();
+  await expect(page.getByRole('switch', { name: /Skip TLS (verification|Verify)/i })).toBeVisible();
+  await expect(page.getByRole('combobox', { name: 'Logs datasource', exact: true })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Tags', exact: true })).toBeVisible();
+  await expect(page.getByRole('switch', { name: 'Node graph', exact: true })).toBeVisible();
+
+  await page.getByRole('textbox', { name: /^URL/ }).fill(provisioned.url ?? '');
+  await page.getByRole('textbox', { name: 'Organization', exact: true }).fill('default');
+  await page.getByRole('textbox', { name: 'User', exact: true }).fill('root@example.com');
+  await passwordInput.fill('Complexpass#123');
+
   await expect(configPage.saveAndTest()).toBeOK();
-});
-
-test('"Save & test" should fail when configuration is invalid', async ({
-  createDataSourceConfigPage,
-  readProvisionedDataSource,
-  page,
-}) => {
-  const ds = await readProvisionedDataSource<MyDataSourceOptions, MySecureJsonData>({ fileName: 'datasources.yml' });
-  const configPage = await createDataSourceConfigPage({ type: ds.type });
-  await page.getByRole('textbox', { name: 'Path' }).fill(ds.jsonData.path ?? '');
-  await expect(configPage.saveAndTest()).not.toBeOK();
-  await expect(configPage).toHaveAlert('error', { hasText: 'API key is missing' });
+  await expect(configPage).toHaveAlert('success');
 });

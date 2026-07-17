@@ -21,11 +21,6 @@ export function CheatSheet(_props: QueryEditorHelpProps<O2Query>) {
         Durations accept human units: <code>100us</code>, <code>1.5ms</code>, <code>2s</code>. A bare number is treated
         as microseconds (OpenObserve&apos;s native duration unit).
       </p>
-      <p>
-        The <strong>Raw WHERE</strong> box is appended to the generated SQL <code>WHERE</code> clause, so you can express
-        anything OpenObserve SQL supports against the traces stream, for example{' '}
-        <code>http_status_code &gt;= 500 AND service_name = &apos;checkout&apos;</code>.
-      </p>
     </div>
   );
 }

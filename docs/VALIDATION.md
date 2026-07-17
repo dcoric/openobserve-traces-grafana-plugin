@@ -1,19 +1,18 @@
 # Live-instance validation checklist
 
-> **Status (2026-07-17):** executed against the local emulation stack
-> (`docs/DEV-ENVIRONMENT.md`: OpenObserve **v0.91.2**, single-node, S3-backed,
-> OTLP-ingested simulated traces). Results are recorded per section below and
-> in the sign-off; the captured ground-truth response is committed at
-> [`pkg/plugin/testdata/live_trace_v0.91.2.json`](../pkg/plugin/testdata/live_trace_v0.91.2.json).
-> §8 (large traces / window edges) is still open, and everything must be
-> **re-confirmed against GR's production instance** (version, auth mode) —
-> IMPLEMENT_PLAN Phase 5.
+> **Split status (2026-07-17):** §§0–7 below record the prior local emulation
+> run (`docs/DEV-ENVIRONMENT.md`: OpenObserve **v0.91.2**, single-node,
+> S3-backed, OTLP-ingested simulated traces), including the committed ground
+> truth at [`pkg/plugin/testdata/live_trace_v0.91.2.json`](../pkg/plugin/testdata/live_trace_v0.91.2.json).
+> The hardened query, limit, warning, and frontend paths were changed after
+> that run and are covered by current unit/component tests. The local `dist/`
+> backend is stale and host Mage is unavailable, so fresh runtime acceptance,
+> §8, and GR production validation remain pending.
 
-Every field mapping and time-unit conversion in this plugin was derived from
-reading OpenObserve's source code (`src/service/traces/mod.rs`,
-`src/handler/http/request/traces/mod.rs`), **not** from a running instance. This
-document is the gate: work through it against a real OpenObserve deployment with
-a known trace before relying on the plugin.
+The original field mapping was source-derived and then checked against the
+prior local run. This document remains the live-instance gate: do not treat
+unit tests or stale binaries as current acceptance against a rebuilt backend or
+GR deployment.
 
 For each item: **(a)** what we assume, **(b)** how to check it, **(c)** where to
 fix it if the assumption is wrong.
@@ -34,16 +33,16 @@ curl -s -u "$EMAIL:$PASSWORD" \
   | jq '.hits[0]'
 ```
 
-Keep this `hits[0]` JSON; it answers most items below. (You can also drop it into
-`pkg/plugin/transform_test.go` as a second golden fixture.)
+Keep this `hits[0]` JSON; it answers most items below. The captured local
+response is now exercised by `pkg/plugin/transform_fixture_test.go`.
 
 ## 1. Time units (highest risk)
 
-| Assumption | Check on `hits[0]` | Fix if wrong |
-|---|---|---|
-| `start_time` / `end_time` are **nanoseconds** | ~19 digits (e.g. `1.7e18`) | `epochToMillis` auto-detects by magnitude, so a shift to µs/ms is handled — but confirm the rendered span start matches the o2 UI. |
-| `duration` is **microseconds** | a span of ~1ms shows `~1000` | If it is ns or ms, change the `÷ 1000` in `transform.go` (`buildTraceFrame`) and `nodegraph.go`. **This is NOT magnitude-detectable** — it must be right. |
-| event `_timestamp` (inside `events`) is **nanoseconds** | ~19 digits | `epochToMillis` handles it; confirm event markers land at the right offset in the waterfall. |
+| Assumption                                              | Check on `hits[0]`           | Fix if wrong                                                                                                                                              |
+| ------------------------------------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `start_time` / `end_time` are **nanoseconds**           | ~19 digits (e.g. `1.7e18`)   | `epochToMillis` auto-detects by magnitude, so a shift to µs/ms is handled — but confirm the rendered span start matches the o2 UI.                        |
+| `duration` is **microseconds**                          | a span of ~1ms shows `~1000` | If it is ns or ms, change the `÷ 1000` in `transform.go` (`buildTraceFrame`) and `nodegraph.go`. **This is NOT magnitude-detectable** — it must be right. |
+| event `_timestamp` (inside `events`) is **nanoseconds** | ~19 digits                   | `epochToMillis` handles it; confirm event markers land at the right offset in the waterfall.                                                              |
 
 **Acceptance:** the waterfall's total duration, each span's start offset, and bar
 widths match OpenObserve's own trace view for the same trace.
@@ -100,19 +99,27 @@ timestamps and attributes.
 
 ## 6. Search results (table)
 
-- **Assume:** the `GROUP BY trace_id` SQL in `buildSearchSQL` runs against
-  `type=traces`, and `first_value(... ORDER BY ...)`, `count(DISTINCT ...)` are
-  supported by OpenObserve's SQL engine.
+- **Implemented:** `buildSearchSQL` uses conditional `HAVING` aggregation:
+  span predicates are combined in one CASE expression so they match the same
+  span, while all spans from selected traces remain available for counts,
+  duration, services, and first-name fields. Go unit tests cover the generated
+  SQL and the 500-trace search limit.
+- **Prior local check:** the pre-hardening `GROUP BY trace_id` query and
+  `first_value(... ORDER BY ...)`/`count(DISTINCT ...)` forms were accepted by
+  OpenObserve v0.91.2. This is not current acceptance of the changed backend.
 - **Check:** run a Search query; confirm the table populates with trace id, name,
   service, duration, span/error counts.
 - **Fix:** if `first_value(... ORDER BY ...)` is unsupported, fall back to
   `GET /api/{org}/{stream}/traces/latest` (documented; returns `first_event`).
 
-**Acceptance:** searching returns traces; clicking a trace id opens its waterfall.
+**Acceptance:** after a fresh Mage build, verify filtered table summaries match
+the unfiltered trace-by-id waterfall. Raw `rawWhere`/`rawSql` inputs are not
+supported. Search requests above 500 are rejected; this is a cap, not
+pagination or an unlimited-size contract.
 
 ## 7. Auth & connectivity
 
-- **Check:** *Save & test* succeeds. Confirm whether the instance accepts Basic
+- **Check:** _Save & test_ succeeds. Confirm whether the instance accepts Basic
   auth with email\:password, or requires a service-account / API token (used as
   the Basic-auth password). SSO-only instances may reject Basic auth entirely.
 - **Fix:** Basic auth + TLS are handled by Grafana's HTTP settings; no code change
@@ -120,16 +127,26 @@ timestamps and attributes.
 
 ## 8. size = 5000 cap & time window
 
-- **Check:** does a large trace exceed `maxSpansPerTrace` (5000)? Does a trace
-  near the edge of the dashboard range get found (±5 min pad)?
-- **Fix:** tune `maxSpansPerTrace` / `traceIDWindowPadMicros` in the backend, or
-  confirm `size: -1` is accepted for traces and switch to it.
+- **Implemented:** the compose seed includes a deterministic
+  `LARGE_TRACE_SPAN_COUNT=5001` scenario (set to 0 to disable), logs its trace
+  ID, and supports optional `REFERENCE_TIME_MS` while defaulting to current
+  time. Trace lookup compares OpenObserve `total` with returned hits and emits
+  a visible truncation warning when `total > hits`.
+- **Check (still pending live):** does a large trace exceed
+  `maxSpansPerTrace` (5000)? Does a trace near the edge of the dashboard range
+  get found (±5 min pad)? Run both against a freshly built backend.
+- **Possible fix after evidence:** tune `maxSpansPerTrace` /
+  `traceIDWindowPadMicros`, or experimentally evaluate another retrieval policy;
+  do not assume `size: -1`, pagination, or unlimited trace retrieval is
+  supported.
 
 ---
 
 ## Sign-off
 
-Verified 2026-07-17 against the local emulation (o2 v0.91.2, OTLP-seeded data):
+Prior local verification on 2026-07-17 used the emulation (o2 v0.91.2,
+OTLP-seeded data). It is retained as historical evidence; current hardening
+requires fresh Mage-built backend/runtime revalidation.
 
 - [x] §1 timings — `start_time`/`end_time` are **ns** (19 digits), event
       `_timestamp` is **ns**, and **`duration` is µs confirmed**: on a real
@@ -146,26 +163,31 @@ Verified 2026-07-17 against the local emulation (o2 v0.91.2, OTLP-seeded data):
       resource attributes uniformly with `service_` (`service_k8s_pod_name`,
       `service_service_version`, …), so the heuristic classifies this data
       correctly via its `service_` prefix alone. The other prefixes (`k8s_`,
-      `host_`, …) never occur as resource columns — a *span* attribute named
+      `host_`, …) never occur as resource columns — a _span_ attribute named
       e.g. `host_name` would be misclassified. Schema-driven split remains the
       right long-term fix (Phase 3), lower risk than assumed.
 - [x] §5 events/links — both are JSON **strings**. Events:
       `name`, `_timestamp` (ns), attribute keys keep **dots**
       (`exception.message`). Links: `context.{traceId,spanId}` camelCase +
       `droppedAttributesCount`, attrs alongside. Parsed and rendered correctly.
-- [x] §6 search table + drill-down — the `GROUP BY trace_id` SQL with
-      `first_value(... ORDER BY ...)` / `count(DISTINCT …)` is accepted;
-      service + error filters verified; trace-by-id returns the full trace
-      frame (rendered as a 4-span waterfall in Explore).
+- [x] §6 implementation/unit coverage — conditional aggregate `HAVING` keeps
+      full-trace summaries while requiring combined span filters on one span;
+      strict trace IDs, raw-SQL removal, and max search limit are tested.
+- [ ] §6 fresh runtime acceptance — rerun filtered search and drill-down with a
+      freshly built backend; the prior local result predates these changes.
 - [x] §7 Save & test — Basic `email:password` (root user) accepted for both
       queries and OTLP ingestion; health check returns "Connected to
       OpenObserve".
-- [ ] §8 large-trace + time-window behavior — **still open** (needs a >5000-span
-      seed scenario and an edge-of-range trace test).
+- [x] §8 implementation coverage — 5,001-span deterministic seed, current-time
+      default, optional reference time, and total-vs-hits warning are present.
+- [ ] §8 live cap/window behavior — **still open**; verify truncation and the
+      ±5-minute edge window against a fresh backend. No pagination or unlimited
+      size is claimed.
 
-Also verified end-to-end: OTLP → collector → o2 with **zero span loss**
+The prior run also verified end-to-end: OTLP → collector → o2 with **zero span loss**
 (1,260/1,260), Parquet written to the S3 bucket (RustFS), and full trace reads
 after an o2 restart (served from S3, not memtable).
 
 **Production re-validation (GR instance) pending** — version pin, auth mode,
-and a §1 timing spot-check on a real production trace.
+and a §1 timing spot-check on a real production trace. Fresh Mage packaging,
+runtime E2E, and the official Grafana validator are also pending.
