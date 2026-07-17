@@ -28,6 +28,26 @@ in Grafana's native trace view — the same waterfall/timeline UI the stock
 HTTP API (SQL search). The existing official OpenObserve Grafana plugin covers
 logs and metrics only; this fills the traces gap.
 
+### Interpretation of the 17 Jul 26 request
+
+Emulate GR's production shape locally: a docker-compose stack with an
+S3-compatible object store (**RustFS**) as o2's storage backend, **OpenObserve**
+itself, an **OTel Collector** as the ingest path, and Grafana running this
+plugin — plus scripts that generate simulated trace data, so the plugin can be
+developed and validated without access to GR infrastructure.
+
+The referenced
+[grafana-incremental-trace-viewer](https://github.com/G-Research/grafana-incremental-trace-viewer)
+repo is **inspiration only** — it demonstrates the *idea* of preload scripts
+that seed a local Grafana with data for development. Its scripts target a
+different setup and are not expected to be reused as-is (they'd need
+modification anyway); we build our own OTLP-native generator tailored to
+OpenObserve and this plugin's feature set
+([`dev/seed/generate-traces.mjs`](dev/seed/generate-traces.mjs)), borrowing
+patterns from the reference where they fit.
+
+See [`IMPLEMENT_PLAN.md`](IMPLEMENT_PLAN.md) for the phased plan this implies.
+
 ## Decisions taken
 
 - **New, standalone data source plugin with a Go backend** (not an extension of
@@ -38,6 +58,10 @@ logs and metrics only; this fills the traces gap.
   graph, trace-to-logs correlation, and a Tempo-style search builder.
 - **Target latest Grafana (>= 12.x)**; distribute unsigned (allow-list) in dev,
   private-signed for rollout.
+- **(17 Jul 26) Local emulation stack** — docker-compose with RustFS (S3),
+  OpenObserve, OTel Collector, Grafana, and a **custom** OTLP trace generator.
+  The incremental-trace-viewer scripts serve as the idea/reference, not as code
+  to adopt.
 
 See [`README.md`](README.md) for the architecture and API contract, and
 [`docs/VALIDATION.md`](docs/VALIDATION.md) for the live-instance sign-off gate.

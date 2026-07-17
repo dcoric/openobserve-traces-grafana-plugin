@@ -11,6 +11,7 @@
     "lint:fix": "npm run lint -- --fix && prettier --write --list-different .",
     "e2e": "playwright test",
     "server": "docker compose up --build",
+    "seed": "node dev/seed/generate-traces.mjs",
     "sign": "sign-plugin"
   },
   "author": "Gresearch",

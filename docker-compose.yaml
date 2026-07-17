@@ -1,5 +1,126 @@
+# Local emulation of GR's production observability stack:
+#
+#   seed (one-shot) ─OTLP/JSON→ otel-collector ─OTLP/HTTP+Basic auth→ openobserve ─S3 API→ rustfs
+#                                                                          ▲
+#   grafana (plugin dev image, provisioned datasource) ────────────────────┘
+#
+# See docs/DEV-ENVIRONMENT.md for usage, credentials, and troubleshooting.
+# Versions are pinned; bump deliberately (o2 must eventually match GR's).
 services:
   grafana:
     extends:
       file: .config/docker-compose-base.yaml
       service: grafana
+    depends_on:
+      openobserve:
+        condition: service_healthy
+
+  # S3-compatible object store (RustFS) — o2's long-term storage backend.
+  # Beta software; if it misbehaves, swap this one service for minio/minio
+  # (same env var shape via the MINIO_ROOT_USER/PASSWORD aliases).
+  rustfs:
+    image: rustfs/rustfs:1.0.0-beta.10
+    environment:
+      RUSTFS_ACCESS_KEY: openobserve-access
+      RUSTFS_SECRET_KEY: openobserve-secret
+      RUSTFS_VOLUMES: /data
+      RUSTFS_REGION: us-east-1
+    ports:
+      - '9000:9000' # S3 API
+      - '9001:9001' # web console (login: openobserve-access / openobserve-secret)
+    volumes:
+      # Named volume: the container runs as 10001:10001, bind mounts would
+      # need a manual chown.
+      - rustfs-data:/data
+    healthcheck:
+      test: ['CMD', 'curl', '-fsS', 'http://127.0.0.1:9000/health']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # One-shot bucket bootstrap: RustFS has no create-bucket-on-start env var,
+  # and o2 does NOT create its bucket itself. `mc mb -p` is idempotent.
+  rustfs-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    entrypoint: ['/bin/sh', '-c']
+    command:
+      - mc alias set rustfs http://rustfs:9000 openobserve-access openobserve-secret && mc mb -p rustfs/openobserve
+    restart: 'no'
+
+  openobserve:
+    image: public.ecr.aws/zinclabs/openobserve:v0.91.2
+    depends_on:
+      rustfs-init:
+        condition: service_completed_successfully
+    environment:
+      ZO_ROOT_USER_EMAIL: root@example.com
+      ZO_ROOT_USER_PASSWORD: 'Complexpass#123'
+      # WAL/metadata/disk-cache stay local; only long-term Parquet goes to S3.
+      ZO_DATA_DIR: /data
+      ZO_LOCAL_MODE: 'true'
+      ZO_LOCAL_MODE_STORAGE: s3
+      ZO_S3_SERVER_URL: http://rustfs:9000
+      ZO_S3_ACCESS_KEY: openobserve-access
+      ZO_S3_SECRET_KEY: openobserve-secret
+      ZO_S3_BUCKET_NAME: openobserve
+      ZO_S3_REGION_NAME: us-east-1
+      ZO_S3_PROVIDER: minio
+      # Dev knobs (defaults in parentheses):
+      # flush WAL→Parquet→S3 within ~1 min (600s) so S3 writes are observable;
+      ZO_MAX_FILE_RETENTION_TIME: '60'
+      # accept seed spans backdated up to 24h (5h) — the seed spreads traces
+      # into the past, and o2 silently drops spans outside this window.
+      ZO_INGEST_ALLOWED_UPTO: '24'
+    ports:
+      - '5080:5080' # HTTP: UI, REST API, OTLP/HTTP
+      - '5081:5081' # gRPC: OTLP/gRPC
+    volumes:
+      - openobserve-data:/data
+    healthcheck:
+      # The v0.91.2 image is distroless (no shell/curl); `node status` does a
+      # real authenticated GET /node/status against the local HTTP server.
+      test: ['CMD', '/openobserve', 'node', 'status']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.156.0
+    depends_on:
+      openobserve:
+        condition: service_healthy
+    volumes:
+      - ./dev/otel-collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - '4317:4317' # OTLP gRPC (host apps can point here too)
+      - '4318:4318' # OTLP HTTP
+    # No healthcheck: the image is FROM scratch (no shell/curl). Its exporter
+    # retries failed deliveries for up to 5 min, so ordering is forgiving.
+
+  # One-shot simulated-data seeder. Re-run any time with:
+  #   docker compose run --rm seed          (or `npm run seed` from the host)
+  seed:
+    image: node:22-alpine
+    depends_on:
+      openobserve:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    environment:
+      OTLP_HTTP_ENDPOINT: http://otel-collector:4318
+      TRACE_COUNT: ${SEED_TRACE_COUNT:-200}
+      TIME_SPREAD_MINUTES: ${SEED_TIME_SPREAD_MINUTES:-60}
+      ERROR_RATE: ${SEED_ERROR_RATE:-0.08}
+    volumes:
+      - ./dev/seed:/seed:ro
+    command: ['node', '/seed/generate-traces.mjs']
+    restart: 'no'
+
+volumes:
+  rustfs-data:
+  openobserve-data:
