@@ -119,6 +119,15 @@ func (d *Datasource) querySearch(ctx context.Context, query backend.DataQuery, q
 	var r backend.DataResponse
 	frame := buildSearchTableFrame(resp.Hits, stream, d.uid, d.name, sql)
 	attachWarning(frame, resp.searchWarning())
+	// OpenObserve's aggregate `total` cannot signal GROUP BY truncation, so a
+	// full page is the only reliable hint that the limit capped the results.
+	if len(resp.Hits) >= limit {
+		msg := fmt.Sprintf("search returned the maximum of %d traces; more may match — narrow the filters or time range", limit)
+		if limit < maxSearchLimit {
+			msg += fmt.Sprintf(", or raise the limit (max %d)", maxSearchLimit)
+		}
+		attachWarning(frame, msg)
+	}
 	r.Frames = append(r.Frames, frame)
 	return r
 }

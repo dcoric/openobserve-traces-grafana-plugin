@@ -14,6 +14,14 @@ prior local run. This document remains the live-instance gate: do not treat
 unit tests or stale binaries as current acceptance against a rebuilt backend or
 GR deployment.
 
+Contract traceability ([`REQUIREMENTS.md`](../REQUIREMENTS.md)): §1 → TR-02 /
+TR-04 (Gate A timing), §2 → TR-03 (Gate A parent-child), §3 → TR-02 / SQ-05,
+§§4–5 → TR-06, §6 → SQ-01..SQ-07 / SR-02 / SR-03, §7 → CF-02 / Gate D auth
+mode, §8 → TR-05 / SR-03 / SR-05 (Gates A+B: truncation is never silent). The
+sign-off below is the evidence record for Gates A and B; Gate C and Gate D
+status is tracked at the end of this file and in `IMPLEMENT_PLAN.md`
+Phases 4–5.
+
 For each item: **(a)** what we assume, **(b)** how to check it, **(c)** where to
 fix it if the assumption is wrong.
 
@@ -130,8 +138,13 @@ pagination or an unlimited-size contract.
 - **Implemented:** the compose seed includes a deterministic
   `LARGE_TRACE_SPAN_COUNT=5001` scenario (set to 0 to disable), logs its trace
   ID, and supports optional `REFERENCE_TIME_MS` while defaulting to current
-  time. Trace lookup compares OpenObserve `total` with returned hits and emits
-  a visible truncation warning when `total > hits`.
+  time. Determinism is structural by default (scenario mix, span counts, IDs
+  via the pinned `SEED_RANDOM_SEED`); Gate B's "deterministic traces" bullet is
+  fully satisfied only when `REFERENCE_TIME_MS` is also set — record the exact
+  invocation used when citing this as Gate B evidence. Trace lookup compares
+  OpenObserve `total` with returned hits and emits a visible truncation warning
+  when `total > hits`; search results that fill the requested limit warn that
+  more may match (SR-03).
 - **Check (still pending live):** does a large trace exceed
   `maxSpansPerTrace` (5000)? Does a trace near the edge of the dashboard range
   get found (±5 min pad)? Run both against a freshly built backend.
@@ -165,7 +178,8 @@ requires fresh Mage-built backend/runtime revalidation.
       correctly via its `service_` prefix alone. The other prefixes (`k8s_`,
       `host_`, …) never occur as resource columns — a _span_ attribute named
       e.g. `host_name` would be misclassified. Schema-driven split remains the
-      right long-term fix (Phase 3), lower risk than assumed.
+      right long-term fix (planned follow-up: `IMPLEMENT_PLAN.md` Phase 3;
+      affects TR-06), lower risk than assumed.
 - [x] §5 events/links — both are JSON **strings**. Events:
       `name`, `_timestamp` (ns), attribute keys keep **dots**
       (`exception.message`). Links: `context.{traceId,spanId}` camelCase +
@@ -188,6 +202,19 @@ The prior run also verified end-to-end: OTLP → collector → o2 with **zero sp
 (1,260/1,260), Parquet written to the S3 bucket (RustFS), and full trace reads
 after an o2 restart (served from S3, not memtable).
 
-**Production re-validation (GR instance) pending** — version pin, auth mode,
-and a §1 timing spot-check on a real production trace. Fresh Mage packaging,
-runtime E2E, and the official Grafana validator are also pending.
+**Gate C (Automated Quality and Packaging) — partially evidenced:** frontend
+typecheck (`npm run typecheck`), Jest (`npm run test:ci`), backend Go tests
+with race detector (`go test -race ./pkg/...`), and lint (`npm run lint`, 0
+errors / 5 documented deprecation warnings) all passed locally on 2026-07-17
+on the requirements-alignment working tree — re-run them against the current
+tree before citing this line as evidence. Still pending: a fresh Mage backend
+package, runtime E2E against it, and a full official-validator pass on the
+packaged plugin. The release workflow runs the full validator on the built
+archive (CP-04); note the GitHub release is created as a **draft** first —
+publish only after the "Validate plugin" step is green. CI runs the
+`metadatavalid` analyzer on unsigned PR artifacts.
+
+**Gate D (GR Rollout Readiness) — open:** GR's Grafana and o2 version pins
+(CP-01), auth mode, org/stream names, distribution/signing form, the
+trace-to-log decision (CR-01), and a §1 timing spot-check on a real production
+trace.

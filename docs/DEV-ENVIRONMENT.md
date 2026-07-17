@@ -4,6 +4,12 @@ A docker-compose emulation of GR's production observability stack — S3 bucket
 storage, OpenObserve, OTel Collector, Grafana — with simulated trace data, so
 the plugin can be developed and validated without access to GR infrastructure.
 
+This document fulfills DV-01..DV-08 ([`REQUIREMENTS.md`](../REQUIREMENTS.md),
+"Local Development and Demo Requirements") and is the local-proof reference
+for Gate B: the compose stack (DV-01), RustFS-backed o2 (DV-02), repeatable
+seeding with multi-service, error, and large traces (DV-03..DV-06), documented
+safe ports (DV-07), and exact commands (DV-08).
+
 > For a hands-on walkthrough (what to click, what correct results look like),
 > see [`MANUAL-TESTING.md`](MANUAL-TESTING.md). This file is the reference.
 
@@ -70,12 +76,15 @@ The seed service runs automatically on `up`. Re-seed any time:
 ```bash
 docker compose run --rm seed                       # another 200 traces, last 60 min
 docker compose run --rm -e TRACE_COUNT=1000 -e TIME_SPREAD_MINUTES=360 seed
-npm run seed                                       # same, from the host (Node >= 18)
-docker compose run --rm -e LARGE_TRACE_SPAN_COUNT=5001 seed  # truncation case
+SEED_RANDOM_SEED=1 npm run seed                    # from the host (Node >= 18)
+docker compose run --rm -e LARGE_TRACE_SPAN_COUNT=20000 seed  # bigger truncation case
+                                                   # (a 5,001-span trace is already seeded
+                                                   #  by default)
 ```
 
 Generator knobs (env): `TRACE_COUNT` (200), `TIME_SPREAD_MINUTES` (60),
-`ERROR_RATE` (0.08), `SEED_RANDOM_SEED` (compose default 1; `SEED` remains a
+`ERROR_RATE` (0.08), `SEED_RANDOM_SEED` (compose default 1; unset on the host
+it falls back to a random seed; `SEED` remains a
 legacy alias), `LARGE_TRACE_SPAN_COUNT` (compose default 5001; set to 0 to
 disable), and optional `REFERENCE_TIME_MS` for repeatable timestamps.
 `OTLP_HTTP_ENDPOINT` defaults to `http://localhost:4318` on the host.
@@ -134,7 +143,7 @@ docker compose down -v           # stop and WIPE rustfs + openobserve volumes
 
 | Image | Why this pin |
 |---|---|
-| `public.ecr.aws/zinclabs/openobserve:v0.91.2` | Latest stable at pin time (2026-07-17). Env vars/routes used here verified against this tag's source. Re-pin to GR's exact version for rollout (IMPLEMENT_PLAN Phase 5). |
+| `public.ecr.aws/zinclabs/openobserve:v0.91.2` | Latest stable at pin time (2026-07-17). Env vars/routes used here verified against this tag's source. Re-pin to GR's exact version for rollout (REQUIREMENTS.md CP-01 / Gate D; see also IMPLEMENT_PLAN Phase 5). |
 | `rustfs/rustfs:1.0.0-beta.10` | Latest beta at pin time — RustFS is beta with fast release churn; record the digest after first pull if reproducibility matters. |
 | `otel/opentelemetry-collector-contrib:0.156.0` | Latest stable contrib release at pin time. |
 | `minio/mc:RELEASE.2025-08-13T08-35-41Z` | Bucket bootstrap only (`mc mb -p` is idempotent). |

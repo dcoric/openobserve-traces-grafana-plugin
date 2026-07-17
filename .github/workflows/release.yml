@@ -29,5 +29,21 @@ jobs:
           fi
 
       - uses: grafana/plugin-actions/build-plugin@build-plugin/v1.0.2
+        id: build-plugin
         with:
           policy_token: ${{ secrets.GRAFANA_ACCESS_POLICY_TOKEN }}
+
+      # REQUIREMENTS.md CP-04: the packaged plugin must pass the official
+      # Grafana plugin validator before release. build-plugin creates the
+      # GitHub release as a DRAFT whose body tells the maintainer to check
+      # this "Validate plugin" step before publishing — publish only when it
+      # is green. The full analyzer suite runs on the signed archive (CI runs
+      # only metadatavalid, because PR artifacts are unsigned and would fail
+      # the signature analyzers).
+      - name: Validate plugin
+        run: |
+          docker run --pull=always \
+            -v "$PWD/${ARCHIVE}:/archive.zip" \
+            grafana/plugin-validator-cli /archive.zip
+        env:
+          ARCHIVE: ${{ steps.build-plugin.outputs.archive }}

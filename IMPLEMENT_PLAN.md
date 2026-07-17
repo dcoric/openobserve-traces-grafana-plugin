@@ -1,13 +1,16 @@
 # Implementation plan — from "plugin built" to "goal reached"
 
-Companion to [`PLAN.md`](PLAN.md) (the _why_). This file is the _what next_:
-what the 17 July 2026 request changes about our approach, and the concrete
-phases that take the project to its goal.
+This file is the _what next_: the concrete phases that take the project to its
+goal. The authoritative business contract it implements is
+[`REQUIREMENTS.md`](REQUIREMENTS.md) (requirement IDs PR/CF/SQ/TR/CR/SR/DV/CP,
+acceptance Gates A–D); [`PLAN.md`](PLAN.md) records the interpretation and
+design rationale (the _why_).
 
 **Goal.** GR runs OpenObserve (o2) backed by an S3 bucket, fed by OTel, and
 displayed in Grafana. Deliver a Grafana data source plugin that shows o2
 **traces** in Grafana's native trace view (like Tempo), _proven to work_ against
-a stack shaped like GR's — first a local emulation, then the real deployment.
+a stack shaped like GR's — first a local emulation, then the real deployment
+(REQUIREMENTS.md "Required Outcome" / "Definition of Done").
 
 ---
 
@@ -26,18 +29,38 @@ a stack shaped like GR's — first a local emulation, then the real deployment.
  │ (no live    │  │ simulated    │  │ o2; fix    │  │ size cap   │  │ stack    │  │ handover   │
  │ instance)   │  │ trace data   │  │ transform  │  │            │  │          │  │            │
  └─────────────┘  └──────────────┘  └────────────┘  └────────────┘  └──────────┘  └────────────┘
-    ✅ DONE           ✅ DONE          ⚠️ partial      pending        pending       pending
+    ✅ DONE           ✅ DONE          ⚠️ partial      pending       ⚠️ partial     pending
                                           ▲
                                           │
                                 ██ WE ARE HERE ██
    (stack and hardening paths verified in code/tests 17 Jul: duration=µs
     CONFIRMED; Phase 2 sign-off remains open for fresh rebuilt-backend
-    acceptance and the §8 live cap/window check)
+    acceptance and the §8 live cap/window check; Phase 4 specs are authored
+    but runtime execution is pending)
 ```
 
 Sequenced by risk: Phase 1+2 attack the project's biggest unknown (source-derived
 field/unit mapping never checked against a running o2). Phases 3–4 harden and
 automate. Phase 5 is the only part that needs anything from GR.
+
+### Traceability to REQUIREMENTS.md
+
+| Phase   | Discharges                                                                                                                                                                 | Gate       |
+| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| Phase 0 | PR-01..PR-06 (plugin, SQL-over-API, native frames, Tempo-like flow), CF-01..CF-05 (URL/secure creds/org/stream/discovery/health), SQ-01..SQ-07, TR-01..TR-05, TR-07, SR-01..SR-08; TR-06 partially (heuristic tag split — schema-driven completion is Phase 3) | Gate A     |
+| Phase 1 | DV-01..DV-08 (compose stack, RustFS-backed o2, seeding scenarios, ports, commands)                                                                                          | Gate B     |
+| Phase 2 | Runtime evidence for Gates A+B (incl. TR-05/SR-03/SR-05 truncation and limit warnings)                                                                                      | Gates A, B |
+| Phase 3 | TR-06 (schema-driven tags), CR-01 (conditional trace-to-logs), UI debt                                                                                                      | —          |
+| Phase 4 | Automated quality: typecheck, Jest, Go (+race), lint, e2e, packaging                                                                                                        | Gate C     |
+| Phase 5 | CP-01..CP-04 (versions, official workflow, signing, validator) and the GR business inputs                                                                                   | Gate D     |
+
+Per the 2026-07-17 requirements audit, every MUST behind Gates A–C is
+code/test covered — including the less visible ones: SR-04 (clear
+auth/network/malformed-response errors: `pkg/plugin/client.go` error envelope
++ `CheckHealth`), CP-03 (plugin ID/type stable in `src/plugin.json`),
+CF-01..CF-03 (config editor + settings), SQ-04 (span-name filter in
+`QuerySearchEditor` + `buildSearchFilters`). Still open: CP-01/Gate D (blocked
+on GR inputs) and the live acceptance runs listed under Phases 2 and 4.
 
 ---
 
@@ -202,13 +225,18 @@ Priority order:
 - [ ] **Schema-driven `serviceTags` vs `tags` split** — replace the prefix
       heuristic using `GET /api/{org}/streams/{stream}/schema` (resource wiring
       already exists in `datasource.go`). Now testable against real schemas.
-- [x] Search limit policy is explicit: requests above 500 are rejected;
-      trace detail remains capped at 5000 and warns when `total > hits`.
-      Pagination/unlimited-size behavior is not implemented or claimed.
+- [x] Search limit policy is explicit (SR-03): requests above 500 are
+      rejected; a search page that fills the requested limit carries a visible
+      "more may match" warning; trace detail remains capped at 5000 and warns
+      when `total > hits`. Pagination/unlimited-size behavior is not
+      implemented or claimed.
 - [ ] Decide whether a different trace-detail/pagination policy is needed
       after the §8 live experiment.
-- [ ] Trace-to-logs end-to-end: ship logs from the collector into o2 too (same
-      pipeline), provision an o2 logs datasource, and verify span→logs links.
+- [ ] Trace-to-logs end-to-end _(CR-01, COULD — conditional on GR confirming
+      the target log streams and expected labels; building the local pipeline
+      earlier is a deliberate de-risking choice, not contract scope)_: ship
+      logs from the collector into o2 too (same pipeline), provision an o2
+      logs datasource, and verify span→logs links.
       _(The official o2 plugin or a Loki-compatible source — decide when here.)_
 - [ ] Migrate deprecated `DataSourceHttpSettings` / `Select` to
       `@grafana/plugin-ui` / `Combobox`.
@@ -254,16 +282,24 @@ real deployment in Phase 5:
 
 ## Open questions for GR (ask when convenient, none block Phases 1–4)
 
-1. Exact OpenObserve version + deployment mode (single/cluster, HA)?
-2. Auth for programmatic API access (Basic? service account token? SSO-only)?
-3. o2 organization + traces stream names in use?
-4. Which Grafana version is the target (we build against 13.x)?
-5. Plugin distribution preference: private signing vs unsigned allow-list?
-6. Is trace-to-logs correlation wanted at rollout (which logs datasource)?
+The canonical list is the **"Required Business Inputs from GR"** table in
+[`REQUIREMENTS.md`](REQUIREMENTS.md) (o2 version, Grafana version, auth model,
+org/stream names, distribution form, trace-to-log expectation). Plan-specific
+annotations only:
+
+- We currently build against Grafana 13.x and validate against o2 v0.91.2
+  locally; both get re-pinned once GR confirms (CP-01).
+- Deployment mode (single-node vs cluster/HA) matters for the fidelity gaps
+  above, beyond the version pin itself.
+- None of these inputs block Phases 1–4; all of Gate D does block on them.
 
 ---
 
 ## Review findings and recommendations — 2026-07-17 14:48 CEST
+
+> **Historical snapshot.** Most findings below were addressed the same day —
+> see "Implementation follow-up — 2026-07-17 16:55 CEST" for what changed.
+> Do not read this table as current status.
 
 This section records an independent repository-wide review of the plans,
 implementation, tests, live local stack, security boundaries, and responsive

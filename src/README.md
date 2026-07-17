@@ -20,19 +20,21 @@ deployments with an OpenObserve HTTP API.
 - Optional node-graph frames, span events, links, tags, and resource fields.
 - Stream discovery through the data source resource API.
 
-Search has no raw SQL escape hatch and rejects requests above 500 traces. A
-trace lookup is capped at 5,000 spans and exposes a warning when OpenObserve
-reports more spans than were returned. These limits are explicit; pagination
-and unlimited trace retrieval are not provided.
+Search has no raw SQL escape hatch and rejects requests above 500 traces; a
+search page that fills the requested limit carries a visible "more may match"
+warning. A trace lookup is capped at 5,000 spans and exposes a warning when
+OpenObserve reports more spans than were returned. These limits are explicit;
+pagination and unlimited trace retrieval are not provided.
 
 ## Development and support status
 
-The repository's local OpenObserve v0.91.2 validation confirmed the original
-field mappings. Current hardening is covered by tests, but a fresh Mage backend
-build, runtime E2E run, live cap/window validation, and GR deployment validation
-remain required before production use. Schema-driven resource tags,
-Trace-to-logs end-to-end verification, and migration from deprecated Grafana
-HTTP/Select components are also pending.
+Current validation status is maintained in the repository's
+`docs/VALIDATION.md` (traced to the `REQUIREMENTS.md` acceptance gates) —
+consult it before treating any build as production-accepted. Settled evidence:
+the local OpenObserve v0.91.2 validation confirmed the original field
+mappings. Known stable pendings: schema-driven resource tags, Trace-to-logs
+end-to-end verification, and migration from deprecated Grafana HTTP/Select
+components.
 
 See the repository README and `docs/DEV-ENVIRONMENT.md` for development setup,
-seed controls, loopback port defaults, and current validation status.
+seed controls, and loopback port defaults.

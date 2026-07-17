@@ -1,5 +1,12 @@
 # PLAN
 
+> **Authority note.** The business request quoted below has been normalized
+> into [`REQUIREMENTS.md`](REQUIREMENTS.md) — the authoritative product
+> contract (requirement IDs PR/CF/SQ/TR/CR/SR/DV/CP and Gates A–D). Where this
+> document and the contract disagree, the contract wins. This file records the
+> raw request history, interpretation, and design rationale (the _why_);
+> [`IMPLEMENT_PLAN.md`](IMPLEMENT_PLAN.md) holds phasing and status.
+
 ## Original request
 
 > GR is using openobserve. Openobserve or short o2 has grafana plugin that has
@@ -51,13 +58,19 @@ See [`IMPLEMENT_PLAN.md`](IMPLEMENT_PLAN.md) for the phased plan this implies.
 ## Decisions taken
 
 - **New, standalone data source plugin with a Go backend** (not an extension of
-  the existing o2 plugins).
+  the existing o2 plugins) — PR-01, CF-02, SR-01.
 - **No live OpenObserve instance available yet** — build against the
   source-derived spec and gate correctness behind `docs/VALIDATION.md`.
-- **Scope:** trace search + trace-by-id waterfall (core), plus node/service
-  graph, trace-to-logs correlation, and a Tempo-style search builder.
-- **Target latest Grafana (>= 12.x)**; distribute unsigned (allow-list) in dev,
-  private-signed for rollout.
+  _Superseded 17 Jul 26:_ the local emulation stack (IMPLEMENT_PLAN.md
+  Phases 1–2) made the validation gate runnable locally; only §8 live
+  acceptance and the GR-instance re-check remain open.
+- **Scope:** trace search + trace-by-id waterfall (core, PR-04/SQ-01/TR-01..04),
+  plus a span-level node graph (TR-07 constraint: never presented as a Tempo
+  service graph), a Tempo-style search builder (SQ-02..SQ-07), and trace-to-logs
+  correlation **only if GR confirms target log streams** (CR-01, COULD).
+- **Build against Grafana 13.x locally**; the supported Grafana/OpenObserve
+  versions and the signing/distribution form are pending GR confirmation
+  (CP-01, Gate D, "Required Business Inputs from GR" in REQUIREMENTS.md).
 - **(17 Jul 26) Local emulation stack** — docker-compose with RustFS (S3),
   OpenObserve, OTel Collector, Grafana, and a **custom** OTLP trace generator.
   The incremental-trace-viewer scripts serve as the idea/reference, not as code
@@ -118,7 +131,10 @@ links come from `parentSpanID` (empty ⇒ root). There is **no** `DataFrameType.
   whose trace-id cell carries an internal data link.
 - **Trace by id:** `POST /api/{org}/_search?type=traces` with
   `SELECT * FROM "{stream}" WHERE trace_id='{id}' ORDER BY start_time` → the
-  **trace** frame.
+  **trace** frame. Per SR-02, no raw user input reaches that SQL: trace IDs are
+  validated as strict 32-hex before insertion, stream names are quoted, and all
+  search filter values are escaped/structured — there is no raw-SQL escape
+  hatch.
 - Using the generic `_search` endpoint for both keeps the response shape stable
   and lets us control exactly which columns come back (vs the nested
   `traces/latest` payload). `traces/latest` remains the documented fallback.
@@ -136,32 +152,46 @@ this was derived from source (no live instance):
 - **`duration`** is a *relative* value, so magnitude detection cannot work — it is
   converted as microseconds (`÷ 1000`) and is the **one conversion that must be
   confirmed** against a live trace. This is the top item in `docs/VALIDATION.md`.
+  _CONFIRMED 2026-07-17_ against o2 v0.91.2 (IMPLEMENT_PLAN.md Phase 2 §1;
+  fixture `pkg/plugin/testdata/live_trace_v0.91.2.json`) — risk retired for the
+  local stack; the GR-production spot-check remains in Phase 5.
 
-### 6. Milestones (as implemented)
+### 6. Milestones
 
-- **M0** Scaffold + config + health — done
-- **M1** Trace-by-id waterfall — done
-- **M2** Search → table → drill-down link — done
-- **M3** Stream/field discovery (`CallResource`) — partial (streams done; schema
-  endpoint wired, schema-driven tag classification still heuristic)
-- **M4** Node/service graph — done (span-level)
-- **M5** Hardening + trace-to-logs + adversarial review — done (6 confirmed bugs
-  fixed)
+Live status and phasing belong to [`IMPLEMENT_PLAN.md`](IMPLEMENT_PLAN.md); the
+milestone scope was:
+
+- **M0** Scaffold + config + health (CF-01..CF-05)
+- **M1** Trace-by-id waterfall (TR-01..TR-04)
+- **M2** Search → table → drill-down link (SQ-01..SQ-07, PR-04)
+- **M3** Stream/field discovery via `CallResource` (CF-04; schema-driven tag
+  classification still heuristic — IMPLEMENT_PLAN.md Phase 3)
+- **M4** Span-level node graph (TR-07)
+- **M5** Hardening + adversarial review (SR-01..SR-08) — the 2026-07 review
+  confirmed and fixed 6 bugs; trace-to-logs end-to-end remains pending and
+  conditional on GR input (CR-01, IMPLEMENT_PLAN.md Phase 3)
 
 ### 7. Open questions / extension points
 
 _Add detail here as we learn more from a live instance._
 
-- Validate every conversion in `docs/VALIDATION.md` (blocking).
+- ~~Validate every conversion in `docs/VALIDATION.md` (blocking).~~ Done for
+  the local stack 2026-07-17 (§§0–7); only §8 live acceptance and the
+  GR-production re-check remain (IMPLEMENT_PLAN.md Phase 2/5).
 - Replace the `serviceTags` vs `tags` **prefix heuristic** with a **schema-driven**
-  split using `GET /api/{org}/streams/{stream}/schema`.
+  split using `GET /api/{org}/streams/{stream}/schema` (TR-06;
+  IMPLEMENT_PLAN.md Phase 3).
 - Confirm auth mode on the target instance (Basic email:password vs
-  service-account/API token; SSO-only instances may reject Basic).
-- Decide `size = -1` vs the fixed `maxSpansPerTrace` cap for very large traces.
-- Trace-to-metrics / trace-to-profiles correlations (not yet in scope).
+  service-account/API token; SSO-only instances may reject Basic) — Gate D.
+- ~~Decide `size = -1` vs the fixed `maxSpansPerTrace` cap for very large
+  traces.~~ Decided: fixed 5,000-span cap with a visible truncation warning
+  (TR-05/SR-03); revisit only if the §8 live experiment demands it.
+- Trace-to-metrics / trace-to-profiles correlations (CR-02 COULD; not in scope
+  until GR confirms a metrics workflow).
 - Migrate deprecated UI (`DataSourceHttpSettings`, `Select`) to `@grafana/plugin-ui`
   / `Combobox`.
-- Signing & distribution decision for GR (private-signed vs unsigned allow-list).
+- Signing & distribution decision for GR (private-signed vs unsigned
+  allow-list) — CP-02/Gate D.
 
 ### 8. Alternatives considered and rejected
 
