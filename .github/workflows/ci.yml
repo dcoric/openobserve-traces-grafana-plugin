@@ -22,8 +22,6 @@ jobs:
       plugin-version: ${{ steps.metadata.outputs.plugin-version }}
       has-e2e: ${{ steps.check-for-e2e.outputs.has-e2e }}
       has-backend: ${{ steps.check-for-backend.outputs.has-backend }}
-    env:
-      GRAFANA_ACCESS_POLICY_TOKEN: ${{ secrets.GRAFANA_ACCESS_POLICY_TOKEN }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -90,8 +88,15 @@ jobs:
           fi
 
       - name: Sign plugin
-        run: npm run sign
-        if: ${{ env.GRAFANA_ACCESS_POLICY_TOKEN != '' }}
+        if: ${{ github.event_name == 'push' }}
+        env:
+          GRAFANA_ACCESS_POLICY_TOKEN: ${{ secrets.GRAFANA_ACCESS_POLICY_TOKEN }}
+        run: |
+          if [ -n "$GRAFANA_ACCESS_POLICY_TOKEN" ]; then
+            npm run sign
+          else
+            echo "GRAFANA_ACCESS_POLICY_TOKEN is not configured; leaving this push artifact unsigned"
+          fi
 
       - name: Get plugin metadata
         id: metadata

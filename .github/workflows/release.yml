@@ -19,11 +19,15 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Require Grafana signing token
+        env:
+          GRAFANA_ACCESS_POLICY_TOKEN: ${{ secrets.GRAFANA_ACCESS_POLICY_TOKEN }}
+        run: |
+          if [ -z "$GRAFANA_ACCESS_POLICY_TOKEN" ]; then
+            echo "GRAFANA_ACCESS_POLICY_TOKEN must be configured to publish a signed plugin" >&2
+            exit 1
+          fi
+
       - uses: grafana/plugin-actions/build-plugin@build-plugin/v1.0.2
-        # Uncomment to enable plugin signing
-        # (For more info on how to generate the access policy token see https://grafana.com/developers/plugin-tools/publish-a-plugin/sign-a-plugin#generate-an-access-policy-token)
-        #with:
-        # Make sure to save the token in your repository secrets
-        #policy_token: $
-        # Usage of GRAFANA_API_KEY is deprecated, prefer `policy_token` option above
-        #grafana_token: $
+        with:
+          policy_token: ${{ secrets.GRAFANA_ACCESS_POLICY_TOKEN }}

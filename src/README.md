@@ -1,50 +1,38 @@
-<!-- This README file is going to be the one displayed on the Grafana.com website for your plugin. Uncomment and replace the content here before publishing.
+# OpenObserve Traces
 
-Remove any remaining comments before publishing as these may be displayed on Grafana.com -->
+OpenObserve Traces is a Grafana backend data source that renders OpenObserve
+trace data in Grafana's native trace view. It is intended for Grafana 12+
+deployments with an OpenObserve HTTP API.
 
-# Openobserve-Traces
+## Configure
 
-<!-- To help maximize the impact of your README and improve usability for users, we propose the following loose structure:
+1. Add the **OpenObserve Traces** data source.
+2. Set the OpenObserve base URL, organization (default `default`), and the
+   HTTP authentication required by the deployment.
+3. Optionally choose a default traces stream and enable node graph output.
+4. Optionally select a logs data source and configure trace/span ID filters for
+   Trace-to-logs links.
 
-**BEFORE YOU BEGIN**
-- Ensure all links are absolute URLs so that they will work when the README is displayed within Grafana and Grafana.com
-- Be inspired ✨
-  - [grafana-polystat-panel](https://github.com/grafana/grafana-polystat-panel)
-  - [volkovlabs-variable-panel](https://github.com/volkovlabs/volkovlabs-variable-panel)
+## Query features
 
-**ADD SOME BADGES**
+- Structured trace search by service, span name, duration, status, and tags.
+- Strict trace-ID lookup with a native Grafana waterfall.
+- Optional node-graph frames, span events, links, tags, and resource fields.
+- Stream discovery through the data source resource API.
 
-Badges convey useful information at a glance for users whether in the Catalog or viewing the source code. You can use the generator on [Shields.io](https://shields.io/badges/dynamic-json-badge) together with the Grafana.com API
-to create dynamic badges that update automatically when you publish a new version to the marketplace.
+Search has no raw SQL escape hatch and rejects requests above 500 traces. A
+trace lookup is capped at 5,000 spans and exposes a warning when OpenObserve
+reports more spans than were returned. These limits are explicit; pagination
+and unlimited trace retrieval are not provided.
 
-- For the URL parameter use `https://grafana.com/api/plugins/your-plugin-id`.
-- Example queries:
-  - Downloads: `$.downloads`
-  - Catalog Version: `$.version`
-  - Grafana Dependency: `$.grafanaDependency`
-  - Signature Type: `$.versionSignatureType`
-- Optionally, for the logo parameter use `grafana`.
+## Development and support status
 
-Full example: ![Dynamic JSON Badge](https://img.shields.io/badge/dynamic/json?logo=grafana&query=$.version&url=https://grafana.com/api/plugins/grafana-polystat-panel&label=Marketplace&prefix=v&color=F47A20)
+The repository's local OpenObserve v0.91.2 validation confirmed the original
+field mappings. Current hardening is covered by tests, but a fresh Mage backend
+build, runtime E2E run, live cap/window validation, and GR deployment validation
+remain required before production use. Schema-driven resource tags,
+Trace-to-logs end-to-end verification, and migration from deprecated Grafana
+HTTP/Select components are also pending.
 
-Consider other [badges](https://shields.io/badges) as you feel appropriate for your project.
-
-## Overview / Introduction
-Provide one or more paragraphs as an introduction to your plugin to help users understand why they should use it.
-
-Consider including screenshots:
-- in [plugin.json](https://grafana.com/developers/plugin-tools/reference/plugin-json#info) include them as relative links.
-- in the README ensure they are absolute URLs.
-
-## Requirements
-List any requirements or dependencies they may need to run the plugin.
-
-## Getting Started
-Provide a quick start on how to configure and use the plugin.
-
-## Documentation
-If your project has dedicated documentation available for users, provide links here. For help in following Grafana's style recommendations for technical documentation, refer to our [Writer's Toolkit](https://grafana.com/docs/writers-toolkit/).
-
-## Contributing
-Do you want folks to contribute to the plugin or provide feedback through specific means? If so, tell them how!
--->
+See the repository README and `docs/DEV-ENVIRONMENT.md` for development setup,
+seed controls, loopback port defaults, and current validation status.

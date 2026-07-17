@@ -12,7 +12,10 @@
  *   TRACE_COUNT         number of traces to generate            (default 200)
  *   TIME_SPREAD_MINUTES traces are spread over the last N min   (default 60)
  *   ERROR_RATE          fraction of traces that fail            (default 0.08)
- *   SEED                integer for deterministic output        (default: random)
+ *   SEED_RANDOM_SEED    integer for deterministic output        (default: 1 in compose)
+ *   SEED                legacy alias for SEED_RANDOM_SEED
+ *   LARGE_TRACE_SPAN_COUNT one deterministic trace's span count (default: 5001)
+ *   REFERENCE_TIME_MS   optional Unix epoch reference for repeatable timestamps
  *
  * Usage:
  *   node dev/seed/generate-traces.mjs
@@ -29,7 +32,9 @@ const OTLP_HTTP_ENDPOINT = process.env.OTLP_HTTP_ENDPOINT ?? 'http://localhost:4
 const TRACE_COUNT = intEnv('TRACE_COUNT', 200);
 const TIME_SPREAD_MINUTES = intEnv('TIME_SPREAD_MINUTES', 60);
 const ERROR_RATE = floatEnv('ERROR_RATE', 0.08);
-const SEED = intEnv('SEED', Math.floor(Math.random() * 2 ** 31));
+const SEED = intEnv('SEED_RANDOM_SEED', intEnv('SEED', Math.floor(Math.random() * 2 ** 31)));
+const LARGE_TRACE_SPAN_COUNT = Math.max(0, intEnv('LARGE_TRACE_SPAN_COUNT', 5001));
+const REFERENCE_TIME_MS = intEnv('REFERENCE_TIME_MS', Date.now());
 const BATCH_SIZE = 50; // traces per OTLP request
 
 function intEnv(name, dflt) {
@@ -116,8 +121,6 @@ const SERVICES = {
   'payment-service': makeResource('payment-service', { runtime: 'jvm' }),
   'inventory-service': makeResource('inventory-service', { runtime: 'go' }),
   'order-processor': makeResource('order-processor', { runtime: 'jvm' }),
-  postgres: makeResource('postgres', { runtime: 'native', attrs: { 'db.system': 'postgresql' } }),
-  redis: makeResource('redis', { runtime: 'native', attrs: { 'db.system': 'redis' } }),
 };
 
 // ---------------------------------------------------------------------------
@@ -174,7 +177,7 @@ function exceptionEvent(atOffsetMs, trace, type, message) {
   };
 }
 
-function dbSpan(trace, parent, { service, system, statement, startOffsetMs, durationMs }) {
+function dbSpan(trace, parent, { peerService, system, statement, startOffsetMs, durationMs }) {
   return trace.span({
     service: parent.service,
     name: system === 'redis' ? 'GET' : 'SELECT shop',
@@ -186,7 +189,7 @@ function dbSpan(trace, parent, { service, system, statement, startOffsetMs, dura
       'db.system': system,
       'db.statement': statement,
       'db.name': system === 'redis' ? '0' : 'shop',
-      'net.peer.name': service,
+      'net.peer.name': peerService,
       'net.peer.port': system === 'redis' ? 6379 : 5432,
     },
   });
@@ -255,7 +258,7 @@ function productListing(startMs, fail) {
 
   const cacheHit = !fail && chance(0.6);
   dbSpan(t, svc, {
-    service: 'redis',
+    peerService: 'redis',
     system: 'redis',
     statement: 'GET products:page:1',
     startOffsetMs: total * 0.12,
@@ -263,7 +266,7 @@ function productListing(startMs, fail) {
   });
   if (!cacheHit) {
     dbSpan(t, svc, {
-      service: 'postgres',
+      peerService: 'postgres',
       system: 'postgresql',
       statement: 'SELECT id, name, price FROM products ORDER BY popularity DESC LIMIT 25',
       startOffsetMs: total * 0.2,
@@ -320,7 +323,7 @@ function checkout(startMs, fail) {
   });
 
   dbSpan(t, cart, {
-    service: 'postgres',
+    peerService: 'postgres',
     system: 'postgresql',
     statement: 'SELECT sku, qty FROM cart_items WHERE cart_id = $1',
     startOffsetMs: total * 0.1,
@@ -360,7 +363,7 @@ function checkout(startMs, fail) {
     attrs: { 'rpc.system': 'grpc', 'order.id': orderId },
   });
   dbSpan(t, inv, {
-    service: 'postgres',
+    peerService: 'postgres',
     system: 'postgresql',
     statement: 'UPDATE stock SET reserved = reserved + $1 WHERE sku = $2',
     startOffsetMs: total * 0.25,
@@ -399,7 +402,7 @@ function orderProcessing(msg) {
     links: [{ traceId: msg.traceId, spanId: msg.spanId, attributes: toAttrs({ 'messaging.operation': 'publish' }) }],
   });
   dbSpan(t, consume, {
-    service: 'postgres',
+    peerService: 'postgres',
     system: 'postgresql',
     statement: 'INSERT INTO orders (id, status) VALUES ($1, $2)',
     startOffsetMs: total * 0.2,
@@ -452,12 +455,36 @@ function userProfile(startMs, fail) {
     error: fail ? 'NotFound' : undefined,
   });
   dbSpan(t, svc, {
-    service: 'postgres',
+    peerService: 'postgres',
     system: 'postgresql',
     statement: 'SELECT * FROM users WHERE id = $1',
     startOffsetMs: total * 0.25,
     durationMs: total * 0.4,
   });
+  return t;
+}
+
+function largeTrace(startMs, spanCount) {
+  const t = new Trace(startMs);
+  const root = t.span({
+    service: 'product-service',
+    name: 'large-trace root',
+    kind: SpanKind.SERVER,
+    startOffsetMs: 0,
+    durationMs: Math.max(1, spanCount * 0.01 + 1),
+    attrs: { 'dev.scenario': 'large-trace', 'dev.span_count': spanCount, 'dev.span_index': 0 },
+  });
+  for (let i = 1; i < spanCount; i++) {
+    t.span({
+      service: 'product-service',
+      name: `large-trace span ${String(i).padStart(4, '0')}`,
+      kind: SpanKind.INTERNAL,
+      parent: root,
+      startOffsetMs: i * 0.01,
+      durationMs: 1,
+      attrs: { 'dev.scenario': 'large-trace', 'dev.span_count': spanCount, 'dev.span_index': i },
+    });
+  }
   return t;
 }
 
@@ -544,14 +571,14 @@ async function main() {
   console.log(`Generating ${TRACE_COUNT} traces over the last ${TIME_SPREAD_MINUTES} min (seed=${SEED}, errorRate=${ERROR_RATE})`);
   console.log(`OTLP/HTTP endpoint: ${OTLP_HTTP_ENDPOINT}`);
 
-  const now = Date.now();
   const spreadMs = TIME_SPREAD_MINUTES * 60 * 1000;
   const traces = [];
   const pendingMessages = [];
+  let largeTraceId;
 
   for (let i = 0; i < TRACE_COUNT; i++) {
     // Leave a small head gap so child spans never land in the future.
-    const startMs = now - 5000 - rand() * spreadMs;
+    const startMs = REFERENCE_TIME_MS - 5000 - rand() * spreadMs;
     const trace = pickScenario().build(startMs, chance(ERROR_RATE));
     traces.push(trace);
     if (trace.producedMessage) {
@@ -560,6 +587,11 @@ async function main() {
   }
   for (const msg of pendingMessages) {
     traces.push(orderProcessing(msg));
+  }
+  if (LARGE_TRACE_SPAN_COUNT > 0) {
+    const trace = largeTrace(REFERENCE_TIME_MS - 5000, LARGE_TRACE_SPAN_COUNT);
+    traces.push(trace);
+    largeTraceId = trace.traceId;
   }
 
   let sent = 0;
@@ -572,7 +604,10 @@ async function main() {
 
   const spanCount = traces.reduce((s, t) => s + t.spans.length, 0);
   console.log(`Done: ${traces.length} traces, ${spanCount} spans (incl. ${pendingMessages.length} async order-processing traces with links).`);
-  console.log(`Example trace id: ${traces[0].traceId}`);
+  console.log(`Example trace id: ${traces[0]?.traceId ?? 'none'}`);
+  if (largeTraceId) {
+    console.log(`Large trace: traceId=${largeTraceId} spans=${LARGE_TRACE_SPAN_COUNT} scenario=large-trace`);
+  }
 }
 
 main().catch((err) => {

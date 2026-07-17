@@ -25,7 +25,6 @@ export interface O2Query extends DataQuery {
   minDuration?: string;
   maxDuration?: string;
   tags?: O2TagFilter[];
-  rawWhere?: string;
   limit?: number;
 
   // Stream override (falls back to the datasource default stream).
