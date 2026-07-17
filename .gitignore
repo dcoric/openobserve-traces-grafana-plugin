@@ -46,3 +46,6 @@ ci/
 .idea
 
 .eslintcache
+
+# Local agent evidence
+.omo/
