@@ -9,11 +9,13 @@ This plugin fills that gap: it queries OpenObserve's trace data over the o2 HTTP
 API (SQL search) and transforms the results into the DataFrame format Grafana's
 trace view consumes.
 
-> ⚠️ **Read [`docs/VALIDATION.md`](docs/VALIDATION.md) before trusting timings.**
-> The span field mapping and time-unit conversions were derived from reading
-> OpenObserve's source, not from a live instance. They must be validated against
-> a real OpenObserve deployment with a known trace before this is relied on in
-> production.
+> ✅ **Validated against a live local instance (2026-07-17).** The span field
+> mapping and time-unit conversions — including the critical `duration` = µs
+> assumption — were confirmed against OpenObserve **v0.91.2** with OTLP-ingested
+> data on the S3-backed local stack (see [`docs/DEV-ENVIRONMENT.md`](docs/DEV-ENVIRONMENT.md)).
+> Results in [`docs/VALIDATION.md`](docs/VALIDATION.md); re-validation against
+> GR's production instance (its o2 version + auth mode) is still required
+> before production reliance.
 
 ## Features
 
@@ -94,13 +96,26 @@ Requires Node ≥ 22, Go ≥ 1.24, and [mage](https://magefile.org).
 
 ```bash
 npm install
-npm run build            # frontend → dist/
-mage -v build:linux      # backend  → dist/gpx_openobserve_traces_linux_amd64
-                         # (use build:darwinARM64 etc. for local dev)
-npm run server           # docker compose: Grafana with the plugin mounted
+npm run build              # frontend → dist/
+mage -v build:linuxARM64   # backend for the container (Apple Silicon)
+                           # use build:linux on x86_64 hosts / CI
+npm run server             # docker compose: the FULL local stack
+npm run seed               # (re)generate simulated traces any time
 ```
 
-Open http://localhost:3000 → Connections → Data sources → **OpenObserve Traces**.
+`npm run server` brings up the complete local emulation of the production
+stack — RustFS (S3) ← OpenObserve ← OTel Collector ← trace simulator — plus
+Grafana with the plugin and a provisioned datasource, and seeds ~200 simulated
+multi-service traces automatically. See
+[`docs/DEV-ENVIRONMENT.md`](docs/DEV-ENVIRONMENT.md) for URLs, credentials,
+seeding knobs and troubleshooting.
+
+Open http://localhost:3000 → Explore → **OpenObserve Traces**.
+
+**➡️ [`docs/MANUAL-TESTING.md`](docs/MANUAL-TESTING.md)** is the step-by-step
+walkthrough for running and testing everything by hand — what to click in
+Explore, what a correct result looks like, and how to poke each layer
+(o2 API, S3 bucket, plugin health) directly.
 
 ### Test / lint
 

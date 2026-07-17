@@ -1,0 +1,57 @@
+# OTel Collector config for the local dev stack.
+#
+# Receives OTLP (gRPC :4317, HTTP :4318) from the seed script / any local app
+# and forwards to OpenObserve — the same ingest path GR uses in production.
+#
+# Endpoint rules (verified against OpenObserve v0.91.2 source + docs):
+#  - otlphttp endpoint is the org API base WITHOUT a trailing slash; the
+#    exporter appends /v1/traces (and /v1/logs, /v1/metrics) itself.
+#  - Auth is plain Basic base64(email:password) of the root user bootstrapped
+#    in docker-compose.yaml (root@example.com : Complexpass#123).
+#  - Do NOT set an `organization` header on the HTTP exporter — it would
+#    override the org taken from the URL path.
+#  - `stream-name` picks the target o2 stream; omitted it defaults to
+#    "default" anyway. Kept explicit for clarity.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+
+exporters:
+  otlphttp/openobserve:
+    endpoint: http://openobserve:5080/api/default
+    headers:
+      Authorization: 'Basic cm9vdEBleGFtcGxlLmNvbTpDb21wbGV4cGFzcyMxMjM='
+      stream-name: default
+
+  # Break-glass alternative: OTLP/gRPC straight into o2 (port 5081).
+  # Unlike HTTP, gRPC REQUIRES the `organization` metadata header.
+  # otlp/openobserve:
+  #   endpoint: openobserve:5081
+  #   headers:
+  #     Authorization: 'Basic cm9vdEBleGFtcGxlLmNvbTpDb21wbGV4cGFzcyMxMjM='
+  #     organization: default
+  #     stream-name: default
+  #   tls:
+  #     insecure: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/openobserve]
+    # Logs pipeline reserved for the trace-to-logs work (IMPLEMENT_PLAN
+    # Phase 3): the seed script does not emit logs yet, but any OTLP logs
+    # sent to this collector already land in o2's "default" logs stream.
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/openobserve]

@@ -1,5 +1,14 @@
 # Live-instance validation checklist
 
+> **Status (2026-07-17):** executed against the local emulation stack
+> (`docs/DEV-ENVIRONMENT.md`: OpenObserve **v0.91.2**, single-node, S3-backed,
+> OTLP-ingested simulated traces). Results are recorded per section below and
+> in the sign-off; the captured ground-truth response is committed at
+> [`pkg/plugin/testdata/live_trace_v0.91.2.json`](../pkg/plugin/testdata/live_trace_v0.91.2.json).
+> §8 (large traces / window edges) is still open, and everything must be
+> **re-confirmed against GR's production instance** (version, auth mode) —
+> IMPLEMENT_PLAN Phase 5.
+
 Every field mapping and time-unit conversion in this plugin was derived from
 reading OpenObserve's source code (`src/service/traces/mod.rs`,
 `src/handler/http/request/traces/mod.rs`), **not** from a running instance. This
@@ -120,11 +129,43 @@ timestamps and attributes.
 
 ## Sign-off
 
-- [ ] §1 timings match the o2 UI for a known trace
-- [ ] §2 spans nest with a single root
-- [ ] §3 kind icons + error coloring correct
-- [ ] §4 attributes correctly sectioned
-- [ ] §5 events/links render
-- [ ] §6 search table + drill-down works
-- [ ] §7 Save & test passes
-- [ ] §8 large-trace + time-window behavior acceptable
+Verified 2026-07-17 against the local emulation (o2 v0.91.2, OTLP-seeded data):
+
+- [x] §1 timings — `start_time`/`end_time` are **ns** (19 digits), event
+      `_timestamp` is **ns**, and **`duration` is µs confirmed**: on a real
+      span, `end_time − start_time` = 27,929,851 ns and `duration` = 27,929.
+      Plugin renders 27.929 ms — matches exactly. (The one non-detectable
+      conversion is right.)
+- [x] §2 spans nest with a single root — `reference_parent_span_id` present on
+      children, absent on the root; `reference_parent_trace_id` /
+      `reference_ref_type` also exist as columns.
+- [x] §3 kinds/status — `span_kind` is a string digit (`"2"`, `"3"` observed);
+      `span_status` `OK`/`ERROR`/`UNSET`; `status_code` int 0/1/2;
+      `status_message` populated on errors (`card_declined`).
+- [x] §4 attributes sectioned — with a caveat: o2 v0.91.2 prefixes **all**
+      resource attributes uniformly with `service_` (`service_k8s_pod_name`,
+      `service_service_version`, …), so the heuristic classifies this data
+      correctly via its `service_` prefix alone. The other prefixes (`k8s_`,
+      `host_`, …) never occur as resource columns — a *span* attribute named
+      e.g. `host_name` would be misclassified. Schema-driven split remains the
+      right long-term fix (Phase 3), lower risk than assumed.
+- [x] §5 events/links — both are JSON **strings**. Events:
+      `name`, `_timestamp` (ns), attribute keys keep **dots**
+      (`exception.message`). Links: `context.{traceId,spanId}` camelCase +
+      `droppedAttributesCount`, attrs alongside. Parsed and rendered correctly.
+- [x] §6 search table + drill-down — the `GROUP BY trace_id` SQL with
+      `first_value(... ORDER BY ...)` / `count(DISTINCT …)` is accepted;
+      service + error filters verified; trace-by-id returns the full trace
+      frame (rendered as a 4-span waterfall in Explore).
+- [x] §7 Save & test — Basic `email:password` (root user) accepted for both
+      queries and OTLP ingestion; health check returns "Connected to
+      OpenObserve".
+- [ ] §8 large-trace + time-window behavior — **still open** (needs a >5000-span
+      seed scenario and an edge-of-range trace test).
+
+Also verified end-to-end: OTLP → collector → o2 with **zero span loss**
+(1,260/1,260), Parquet written to the S3 bucket (RustFS), and full trace reads
+after an o2 restart (served from S3, not memtable).
+
+**Production re-validation (GR instance) pending** — version pin, auth mode,
+and a §1 timing spot-check on a real production trace.
