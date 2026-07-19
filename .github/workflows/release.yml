@@ -33,8 +33,8 @@ jobs:
         with:
           policy_token: ${{ secrets.GRAFANA_ACCESS_POLICY_TOKEN }}
 
-      # REQUIREMENTS.md CP-04: the packaged plugin must pass the official
-      # Grafana plugin validator before release. build-plugin creates the
+      # The packaged plugin must pass the official Grafana plugin validator
+      # before release. build-plugin creates the
       # GitHub release as a DRAFT whose body tells the maintainer to check
       # this "Validate plugin" step before publishing — publish only when it
       # is green. The full analyzer suite runs on the signed archive (CI runs

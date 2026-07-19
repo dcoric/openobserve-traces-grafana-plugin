@@ -4,11 +4,9 @@ A docker-compose emulation of GR's production observability stack — S3 bucket
 storage, OpenObserve, OTel Collector, Grafana — with simulated trace data, so
 the plugin can be developed and validated without access to GR infrastructure.
 
-This document fulfills DV-01..DV-08 ([`REQUIREMENTS.md`](../REQUIREMENTS.md),
-"Local Development and Demo Requirements") and is the local-proof reference
-for Gate B: the compose stack (DV-01), RustFS-backed o2 (DV-02), repeatable
-seeding with multi-service, error, and large traces (DV-03..DV-06), documented
-safe ports (DV-07), and exact commands (DV-08).
+This environment provides a compose stack with RustFS-backed OpenObserve,
+repeatable multi-service trace seeding, error and large-trace scenarios,
+documented loopback ports, and exact setup commands.
 
 > For a hands-on walkthrough (what to click, what correct results look like),
 > see [`MANUAL-TESTING.md`](MANUAL-TESTING.md). This file is the reference.
@@ -57,14 +55,14 @@ access.
 
 ## URLs & credentials
 
-| What | Where | Credentials |
-|---|---|---|
-| Grafana | http://localhost:3000 | anonymous admin (dev image) |
-| Provisioned datasource | Explore → **OpenObserve Traces** | pre-configured |
-| OpenObserve UI | http://localhost:5080 | `root@example.com` / `Complexpass#123` |
-| OTLP from host apps | grpc `localhost:4317`, http `localhost:4318` | none (collector) |
-| RustFS console | http://localhost:9001 | `openobserve-access` / `openobserve-secret` |
-| RustFS S3 API | http://localhost:9000 | same keys, path-style |
+| What                   | Where                                        | Credentials                                 |
+| ---------------------- | -------------------------------------------- | ------------------------------------------- |
+| Grafana                | http://localhost:3000                        | anonymous admin (dev image)                 |
+| Provisioned datasource | Explore → **OpenObserve Traces**             | pre-configured                              |
+| OpenObserve UI         | http://localhost:5080                        | `root@example.com` / `Complexpass#123`      |
+| OTLP from host apps    | grpc `localhost:4317`, http `localhost:4318` | none (collector)                            |
+| RustFS console         | http://localhost:9001                        | `openobserve-access` / `openobserve-secret` |
+| RustFS S3 API          | http://localhost:9000                        | same keys, path-style                       |
 
 Host ports used: 3000, 2345 (delve, from the Grafana dev image), 4317, 4318,
 5080, 5081, 9000, 9001.
@@ -141,20 +139,20 @@ docker compose down -v           # stop and WIPE rustfs + openobserve volumes
 
 ## Pinned versions (bump deliberately)
 
-| Image | Why this pin |
-|---|---|
-| `public.ecr.aws/zinclabs/openobserve:v0.91.2` | Latest stable at pin time (2026-07-17). Env vars/routes used here verified against this tag's source. Re-pin to GR's exact version for rollout (REQUIREMENTS.md CP-01 / Gate D; see also IMPLEMENT_PLAN Phase 5). |
-| `rustfs/rustfs:1.0.0-beta.10` | Latest beta at pin time — RustFS is beta with fast release churn; record the digest after first pull if reproducibility matters. |
-| `otel/opentelemetry-collector-contrib:0.156.0` | Latest stable contrib release at pin time. |
-| `minio/mc:RELEASE.2025-08-13T08-35-41Z` | Bucket bootstrap only (`mc mb -p` is idempotent). |
-| Grafana (via `GRAFANA_VERSION`, default 13.0.2) | From `.config/docker-compose-base.yaml`. |
+| Image                                           | Why this pin                                                                                                                                                   |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `public.ecr.aws/zinclabs/openobserve:v0.91.2`   | Latest stable at pin time (2026-07-17). Env vars/routes used here verified against this tag's source. Re-pin to the deployment's exact version before rollout. |
+| `rustfs/rustfs:1.0.0-beta.10`                   | Latest beta at pin time — RustFS is beta with fast release churn; record the digest after first pull if reproducibility matters.                               |
+| `otel/opentelemetry-collector-contrib:0.156.0`  | Latest stable contrib release at pin time.                                                                                                                     |
+| `minio/mc:RELEASE.2025-08-13T08-35-41Z`         | Bucket bootstrap only (`mc mb -p` is idempotent).                                                                                                              |
+| Grafana (via `GRAFANA_VERSION`, default 13.0.2) | From `.config/docker-compose-base.yaml`.                                                                                                                       |
 
 ## Troubleshooting
 
 - **Plugin fails to load in Grafana** — the backend binary for the container's
   architecture must exist in `dist/` (`gpx_openobserve_traces_linux_arm64` on
   Apple Silicon, `..._linux_amd64` on x86_64). Run the matching `mage
-  build:...` target. Changing `plugin.json` requires a Grafana restart.
+build:...` target. Changing `plugin.json` requires a Grafana restart.
 - **No traces in Grafana but seed said "Done"** — check collector logs
   (`docker compose logs otel-collector`) for 4xx from o2: auth header, or the
   endpoint having a trailing slash (must be `/api/default`, the exporter

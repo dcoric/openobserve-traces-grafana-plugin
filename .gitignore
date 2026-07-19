@@ -49,3 +49,9 @@ ci/
 
 # Local agent evidence
 .omo/
+
+# Local planning and private AI notes
+/GEMINI.md
+/IMPLEMENT_PLAN.md
+/PLAN.md
+/REQUIREMENTS.md

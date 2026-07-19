@@ -9,36 +9,30 @@ This plugin fills that gap: it queries OpenObserve's trace data over the o2 HTTP
 API (SQL search) and transforms the results into the DataFrame format Grafana's
 trace view consumes.
 
-The authoritative business contract for this plugin is
-[`REQUIREMENTS.md`](REQUIREMENTS.md) — requirement IDs referenced below
-(PR/CF/SQ/TR/CR/SR/DV/CP) and acceptance Gates A–D are defined there.
-
 > **Validation status:** maintained in one place —
 > [`docs/VALIDATION.md`](docs/VALIDATION.md). Settled evidence: the local o2
 > v0.91.2 run (2026-07-17) confirmed the field mappings and `duration` = µs.
 > Everything still open (packaging, runtime E2E, live checks, GR rollout) is
-> listed in that file's sign-off and Gate C/D sections — trust it over any
-> status prose found elsewhere.
+> listed in that file — trust it over any status prose found elsewhere.
 
 ## Features
 
 - **Search** traces by service, span/operation name, duration, error status and
-  attribute filters → results table → click a trace to open its waterfall
-  (SQ-01..SQ-07).
+  attribute filters → results table → click a trace to open its waterfall.
 - **Trace ID** lookup → full span waterfall with span details, tags, resource
-  attributes, events (logs) and links (references) (TR-01..TR-06).
+  attributes, events (logs) and links (references).
 - **Node graph** (optional) — a span-level graph of the spans in the opened
   trace, alongside the waterfall. It shows span relationships, not a
-  Tempo-style service graph (TR-07).
+  Tempo-style service graph.
 - **Trace → logs** link configuration (`tracesToLogsV2`, rendered by Grafana
-  core) — correlation is CR-01 (COULD): pending GR confirmation of target log
-  streams/labels and not yet validated end-to-end.
+  core) — pending GR confirmation of target log streams/labels and not yet
+  validated end-to-end.
 - Reuses Grafana's HTTP data source settings for **URL, Basic Auth and TLS** —
-  credentials stay on the backend, never in the browser (CF-01, CF-02, SR-01).
-- Structured search has no raw SQL/`rawWhere` escape hatch (SR-02). Search
-  requests are capped at 500 traces and warn when a page fills the requested
-  limit; trace lookup is capped at 5,000 spans and warns when OpenObserve
-  reports more total spans than were returned (SR-03, TR-05).
+  credentials stay on the backend, never in the browser.
+- Structured search has no raw SQL/`rawWhere` escape hatch. Search requests are
+  capped at 500 traces and warn when a page fills the requested limit; trace
+  lookup is capped at 5,000 spans and warns when OpenObserve reports more total
+  spans than were returned.
 
 ## Architecture
 
@@ -159,21 +153,21 @@ npm run test:ci
 
 ## Status & known limitations
 
-Live validation status is tracked in [`docs/VALIDATION.md`](docs/VALIDATION.md)
-(mapped to REQUIREMENTS.md Gates A–D); stable limitations:
+Live validation status is tracked in [`docs/VALIDATION.md`](docs/VALIDATION.md);
+stable limitations:
 
 - The prior local v0.91.2 mapping run is not a fresh acceptance of the hardened
   backend. Fresh Mage build, runtime E2E, live cap/window checks, and GR
-  version/auth rollout validation (CP-01, Gate D) remain pending.
+  version/auth rollout validation remain pending.
 - `serviceTags` vs `tags` is still a prefix heuristic; schema-driven tags are
-  planned (TR-06).
+  planned.
 - Trace-to-logs configuration is present, but a logs source, emitted logs, and
-  end-to-end correlation have not been validated (CR-01, COULD — pending GR
-  confirmation of log streams/labels).
+  end-to-end correlation have not been validated pending GR confirmation of
+  log streams/labels.
 - Trace-by-ID widens the dashboard time range by ±5 min. Trace detail is capped
   at 5,000 spans with a visible truncation warning; pagination/unlimited size is
   not implemented or claimed. Search pages are capped at 500 traces and warn
-  when a page fills the requested limit (SR-03, TR-05).
+  when a page fills the requested limit.
 - Seed IDs are deterministic when `SEED_RANDOM_SEED` is fixed, while timestamps
   use current time by default. Re-running with the same seed reuses IDs at new
   timestamps; use a different seed or reset volumes for a clean dataset.

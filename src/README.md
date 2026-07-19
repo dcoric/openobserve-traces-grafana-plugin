@@ -29,12 +29,11 @@ pagination and unlimited trace retrieval are not provided.
 ## Development and support status
 
 Current validation status is maintained in the repository's
-`docs/VALIDATION.md` (traced to the `REQUIREMENTS.md` acceptance gates) —
-consult it before treating any build as production-accepted. Settled evidence:
-the local OpenObserve v0.91.2 validation confirmed the original field
-mappings. Known stable pendings: schema-driven resource tags, Trace-to-logs
-end-to-end verification, and migration from deprecated Grafana HTTP/Select
-components.
+`docs/VALIDATION.md` — consult it before treating any build as
+production-accepted. Settled evidence: the local OpenObserve v0.91.2
+validation confirmed the original field mappings. Known stable pendings:
+schema-driven resource tags, Trace-to-logs end-to-end verification, and
+migration from deprecated Grafana HTTP/Select components.
 
 See the repository README and `docs/DEV-ENVIRONMENT.md` for development setup,
 seed controls, and loopback port defaults.

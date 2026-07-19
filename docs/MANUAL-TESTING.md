@@ -5,9 +5,8 @@ hand. Reference details (URLs, credentials, image pins, troubleshooting) live
 in [`DEV-ENVIRONMENT.md`](DEV-ENVIRONMENT.md); the validation checklist this
 walkthrough feeds is [`VALIDATION.md`](VALIDATION.md).
 
-Each step below is annotated with the [`REQUIREMENTS.md`](../REQUIREMENTS.md)
-requirement IDs and acceptance-gate bullets (Gates A and B) it exercises, so a
-completed walkthrough doubles as gate evidence.
+Completing the walkthrough provides repeatable evidence for connection,
+search, trace rendering, truncation warnings, and S3-backed persistence.
 
 ## 1. Build the plugin (once, and after code changes)
 
@@ -32,10 +31,9 @@ Bring-up is ordered: `rustfs` → bucket init → `openobserve` → collector +
 grafana → **seed runs automatically** and exits after pushing ~200 simulated
 traces spread over the last hour plus one 5,001-span trace. The compose seed
 is structurally deterministic (pinned `SEED_RANDOM_SEED=1`: same IDs, spans,
-scenarios); timestamps default to the current time, so for Gate B's
-"deterministic traces" evidence also set `REFERENCE_TIME_MS` and record the
-invocation (see [`VALIDATION.md`](VALIDATION.md) §8). Watch for the seed's
-completion lines:
+scenarios); timestamps default to the current time, so set `REFERENCE_TIME_MS`
+and record the invocation when fully reproducible timestamps are needed (see
+[`VALIDATION.md`](VALIDATION.md) §8). Watch for the seed's completion lines:
 
 ```
 seed-1  | Done: 237 traces, 6261 spans (incl. 36 async order-processing traces with links).
@@ -50,7 +48,7 @@ truncation check below.
 Open **http://localhost:3000** (anonymous admin, no login) → **Explore** →
 datasource **OpenObserve Traces**.
 
-### Datasource configuration _(CF-01..CF-03, CF-05 — Gate A: "A user can configure OpenObserve connection details in Grafana")_
+### Datasource configuration
 
 The provisioned datasource skips this flow, so exercise it once by hand:
 **Connections → Data sources → Add new data source → OpenObserve Traces**
@@ -58,40 +56,39 @@ The provisioned datasource skips this flow, so exercise it once by hand:
 Basic auth (`root@example.com` / `Complexpass#123` — the password lands in a
 secure field), Organization `default`, Default traces stream `default`, and
 click **Save & test** → "Connected to OpenObserve". Break the password and
-save again → a clear error, not a silent failure (CF-05).
+save again → a clear error, not a silent failure.
 
-### Search tab _(SQ-01..SQ-06 — Gate A: search, filters, no raw SQL)_
+### Search tab
 
-- Run with defaults → a table of traces appears (SQ-01, SQ-02).
+- Run with defaults → a table of traces appears.
 - Filter **Service** = `payment-service` and enable **Errors only** → only
-  failed `PaymentService/Charge` traces should return (SQ-03, SQ-05).
+  failed `PaymentService/Charge` traces should return.
 - Set **Span name** = `PaymentService/Charge` → only traces containing that
-  operation return (SQ-04).
-- Try **Min duration** `200ms` → only slower traces remain (SQ-06).
-- Injection probe (SR-02 — Gate A: "User filters cannot inject raw SQL"): set
-  **Service** to `payment-service' OR '1'='1` → it must be treated as a
-  literal string — zero results and no query error, never a widened result
-  set.
+  operation return.
+- Try **Min duration** `200ms` → only slower traces remain.
+- Injection probe: set **Service** to `payment-service' OR '1'='1` → it must be
+  treated as a literal string — zero results and no query error, never a
+  widened result set.
 
-### Waterfall (trace drill-down) _(TR-02..TR-04, TR-06 — Gate A: waterfall, parent-child, errors/timing visible)_
+### Waterfall (trace drill-down)
 
 - Click any **trace ID** in the results → the native trace view opens.
 - Check: spans nest under a single root, bar widths/offsets look sane, and
-  error spans are marked red (TR-03, TR-04).
+  error spans are marked red.
 - Expand a failed `PaymentService/Charge` span → **Logs/Events** contain the
-  `exception` event with type, message and stacktrace (TR-06).
+  `exception` event with type, message and stacktrace.
 - Open an `orders process` span (service `order-processor`) → **References**
-  link back to the originating checkout trace (cross-trace span link, TR-06).
+  link back to the originating checkout trace.
 
-### Trace ID tab & node graph _(TR-01, TR-07)_
+### Trace ID tab & node graph
 
-- Paste a trace ID directly into the **Trace ID** tab (TR-01).
+- Paste a trace ID directly into the **Trace ID** tab.
 - Toggle **Node graph** on → a span-level node graph renders above the
   waterfall (one node per span, edges = parent-child relationships). It shows
   span relationships within this trace — it is **not** a Tempo-style service
-  graph (TR-07).
+  graph.
 
-### Truncation warning (large trace) _(TR-05, SR-03, SR-05, DV-06 — Gates A+B: partial results are never silent)_
+### Truncation warning (large trace)
 
 - Paste the seed's `Large trace: traceId=...` value into the **Trace ID** tab.
 - The waterfall renders at most 5,000 of the 5,001 spans **and** Grafana shows
@@ -103,16 +100,16 @@ save again → a clear error, not a silent failure (CF-05).
   clean "5,000 of 5,001" case, start from `docker compose down -v`.
 - Back on the **Search** tab, set **Limit** to a value the result set fills
   (e.g. `10`) → the results table carries a "search returned the maximum of
-  10 traces; more may match" warning (SR-03).
+  10 traces; more may match" warning.
 
-### Cross-check against OpenObserve's own UI _(TR-02/TR-04 timing correctness — Gate A)_
+### Cross-check against OpenObserve's own UI
 
 Open **http://localhost:5080** (`root@example.com` / `Complexpass#123`) →
 Traces, and open the same trace. Total duration, span offsets and bar widths
 should match what Grafana shows — this is the §1 timing check from
 [`VALIDATION.md`](VALIDATION.md).
 
-## 4. Seed more / different data _(DV-03..DV-06)_
+## 4. Seed more / different data
 
 ```bash
 npm run seed                                            # +200 traces from the host
@@ -139,8 +136,8 @@ curl -s -u 'root@example.com:Complexpass#123' \
 ```
 
 S3 leg — list the Parquet objects OpenObserve wrote (allow ~1 min after
-seeding for the WAL→Parquet flush). This is Gate B's "OpenObserve stores local
-data through RustFS" evidence (DV-02):
+seeding for the WAL→Parquet flush). This confirms that OpenObserve stores local
+data through RustFS:
 
 ```bash
 docker compose run --rm --entrypoint /bin/sh rustfs-init -c \
