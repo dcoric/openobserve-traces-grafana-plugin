@@ -14,7 +14,7 @@
     "seed": "node dev/seed/generate-traces.mjs",
     "sign": "sign-plugin"
   },
-  "author": "Gresearch",
+  "author": "G-Research",
   "license": "Apache-2.0",
   "devDependencies": {
     "@grafana/eslint-config": "^9.0.0",
