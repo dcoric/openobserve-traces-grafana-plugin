@@ -141,6 +141,24 @@ npm run lint
 npm run test:ci
 ```
 
+## Installation
+
+- **Nightly** — built on every push to `main` by the
+  [Nightly](.github/workflows/nightly.yml) workflow. Download the
+  `gresearch-openobservetraces-datasource-nightly` artifact from the latest
+  run, then:
+
+  ```bash
+  grafana plugin install ./gresearch-openobservetraces-datasource-<version>-<sha>.zip
+  ```
+
+  or unzip it into Grafana's `data/plugins/` directory.
+
+- **Release** — push a `v*` tag to run the
+  [Release](.github/workflows/release.yml) workflow, which produces a signed
+  zip and a *draft* GitHub release. Publish the draft, then install the zip
+  the same way as above.
+
 ## Configuration
 
 1. **URL** — the OpenObserve base URL (self-hosted default `http://localhost:5080`).

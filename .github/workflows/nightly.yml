@@ -1,0 +1,90 @@
+name: Nightly
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  nightly:
+    name: Build nightly package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js environment
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Setup Go environment
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build backend
+        uses: magefile/mage-action@a662bd8c29d8106879588cfff83b2faf6e6f59db # v4.0.0
+        with:
+          version: latest
+          args: buildAll
+
+      - name: Sign plugin
+        env:
+          GRAFANA_ACCESS_POLICY_TOKEN: ${{ secrets.GRAFANA_ACCESS_POLICY_TOKEN }}
+        run: |
+          if [ -z "$GRAFANA_ACCESS_POLICY_TOKEN" ]; then
+            echo "GRAFANA_ACCESS_POLICY_TOKEN is not configured; leaving nightly artifact unsigned"
+          else
+            npm run sign
+          fi
+
+      - name: Get plugin metadata
+        id: metadata
+        run: |
+          sudo apt-get install -y jq
+
+          export GRAFANA_PLUGIN_ID=$(jq -r .id dist/plugin.json)
+          export GRAFANA_PLUGIN_VERSION=$(jq -r .info.version dist/plugin.json)
+          export GRAFANA_PLUGIN_SHA=${GITHUB_SHA:0:8}
+
+          echo "plugin-id=${GRAFANA_PLUGIN_ID}" >> $GITHUB_OUTPUT
+          echo "plugin-version=${GRAFANA_PLUGIN_VERSION}" >> $GITHUB_OUTPUT
+          echo "plugin-sha=${GRAFANA_PLUGIN_SHA}" >> $GITHUB_OUTPUT
+          echo "archive=${GRAFANA_PLUGIN_ID}-${GRAFANA_PLUGIN_VERSION}-${GRAFANA_PLUGIN_SHA}.zip" >> $GITHUB_OUTPUT
+
+      - name: Package plugin
+        run: |
+          mv dist "$PLUGIN_ID"
+          zip -r "${PLUGIN_ID}-${PLUGIN_VERSION}-${PLUGIN_SHA}.zip" "$PLUGIN_ID"
+        env:
+          PLUGIN_ID: ${{ steps.metadata.outputs.plugin-id }}
+          PLUGIN_VERSION: ${{ steps.metadata.outputs.plugin-version }}
+          PLUGIN_SHA: ${{ steps.metadata.outputs.plugin-sha }}
+
+      - name: Validate plugin
+        run: |
+          docker run --pull=always \
+            -v "$PWD/${ARCHIVE}:/archive.zip" \
+            grafana/plugin-validator-cli -analyzer=metadatavalid /archive.zip
+        env:
+          ARCHIVE: ${{ steps.metadata.outputs.archive }}
+
+      - name: Upload nightly artifact
+        uses: actions/upload-artifact@v7
+        if-no-files-found: error
+        with:
+          name: ${{ steps.metadata.outputs.plugin-id }}-nightly
+          path: ${{ steps.metadata.outputs.archive }}
