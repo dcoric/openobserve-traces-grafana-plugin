@@ -88,7 +88,6 @@ jobs:
 
       - name: Upload nightly artifact
         uses: actions/upload-artifact@v7
-        if-no-files-found: error
         with:
           name: ${{ steps.metadata.outputs.plugin-id }}-nightly
           path: ${{ steps.metadata.outputs.archive }}
