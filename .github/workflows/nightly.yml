@@ -44,11 +44,15 @@ jobs:
       - name: Sign plugin
         env:
           GRAFANA_ACCESS_POLICY_TOKEN: ${{ secrets.GRAFANA_ACCESS_POLICY_TOKEN }}
+          # Private plugins require the root_url(s) of the Grafana instance(s)
+          # the plugin will be installed on. Override via the SIGN_ROOT_URL
+          # repository variable.
+          SIGN_ROOT_URL: ${{ vars.SIGN_ROOT_URL }}
         run: |
           if [ -z "$GRAFANA_ACCESS_POLICY_TOKEN" ]; then
             echo "GRAFANA_ACCESS_POLICY_TOKEN is not configured; leaving nightly artifact unsigned"
           else
-            npm run sign
+            npm run sign -- --rootUrls "${SIGN_ROOT_URL:-http://localhost:3000}"
           fi
 
       - name: Get plugin metadata
