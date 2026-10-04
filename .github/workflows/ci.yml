@@ -41,6 +41,8 @@ jobs:
         run: npm run lint
       - name: Unit tests
         run: npm run test:ci
+      - name: Seed telemetry tests
+        run: node --test dev/seed/*.test.mjs
       - name: Build frontend
         run: npm run build
 
@@ -207,6 +209,11 @@ jobs:
 
       - name: Install Playwright Browsers
         run: npm exec playwright install chromium --with-deps
+
+      - name: Wait for indexed seed data
+        run: |
+          docker compose wait seed
+          test "$(docker inspect --format '{{.State.ExitCode}}' "$(docker compose ps -aq seed)")" = 0
 
       - name: Run Playwright tests
         id: run-tests
