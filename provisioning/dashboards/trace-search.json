@@ -1,0 +1,17 @@
+{
+  "uid": "openobserve-trace-search",
+  "title": "OpenObserve trace search",
+  "schemaVersion": 39,
+  "editable": true,
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Traces",
+      "type": "table",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 12 },
+      "datasource": { "type": "gresearch-openobservetraces-datasource", "uid": "openobserve-traces-local" },
+      "targets": [{ "refId": "A", "queryType": "search", "limit": 50 }]
+    }
+  ]
+}

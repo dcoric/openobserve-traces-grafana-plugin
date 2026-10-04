@@ -13,6 +13,9 @@ services:
     extends:
       file: .config/docker-compose-base.yaml
       service: grafana
+    build:
+      args:
+        grafana_version: ${GRAFANA_VERSION:-13.2.3}
     ports: !override
       - target: 3000
         published: '3000'
@@ -56,16 +59,21 @@ services:
       retries: 5
       start_period: 20s
 
-  # One-shot bucket bootstrap: RustFS has no create-bucket-on-start env var,
-  # and o2 does NOT create its bucket itself. `mc mb -p` is idempotent.
   rustfs-init:
-    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    image: public.ecr.aws/aws-cli/aws-cli:2.31.0
     depends_on:
       rustfs:
         condition: service_healthy
     entrypoint: ['/bin/sh', '-c']
+    environment:
+      AWS_ACCESS_KEY_ID: openobserve-access
+      AWS_SECRET_ACCESS_KEY: openobserve-secret
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_EC2_METADATA_DISABLED: 'true'
     command:
-      - mc alias set rustfs http://rustfs:9000 openobserve-access openobserve-secret && mc mb -p rustfs/openobserve
+      - >-
+        aws --endpoint-url http://rustfs:9000 s3api head-bucket --bucket openobserve ||
+        aws --endpoint-url http://rustfs:9000 s3api create-bucket --bucket openobserve
     restart: 'no'
 
   openobserve:
