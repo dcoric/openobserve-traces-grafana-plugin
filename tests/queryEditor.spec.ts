@@ -1,12 +1,16 @@
 import { expect, test } from '@grafana/plugin-e2e';
+import { lt } from 'semver';
 
 test('trace search returns seeded rows without a raw SQL escape hatch', async ({
+  grafanaVersion,
   panelEditPage,
   readProvisionedDataSource,
 }) => {
   const provisioned = await readProvisionedDataSource({ fileName: 'datasources.yml' });
   await panelEditPage.datasource.set(provisioned.name);
-  await panelEditPage.setVisualization('Table');
+  if (lt(grafanaVersion, '12.4.0')) {
+    await panelEditPage.setVisualization('Table');
+  }
 
   const queryEditor = panelEditPage.getQueryEditorRow('A');
   await expect(queryEditor.getByRole('combobox', { name: 'Stream', exact: true })).toBeVisible();
@@ -26,12 +30,15 @@ test('trace search returns seeded rows without a raw SQL escape hatch', async ({
 });
 
 test('a searched seeded trace can be opened through direct trace lookup', async ({
+  grafanaVersion,
   panelEditPage,
   readProvisionedDataSource,
 }) => {
   const provisioned = await readProvisionedDataSource({ fileName: 'datasources.yml' });
   await panelEditPage.datasource.set(provisioned.name);
-  await panelEditPage.setVisualization('Table');
+  if (lt(grafanaVersion, '12.4.0')) {
+    await panelEditPage.setVisualization('Table');
+  }
 
   const queryEditor = panelEditPage.getQueryEditorRow('A');
   await queryEditor.getByRole('textbox', { name: 'Service', exact: true }).fill('web-frontend');
