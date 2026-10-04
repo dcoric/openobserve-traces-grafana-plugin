@@ -137,13 +137,20 @@ func TestBuildTraceFrame_Mapping(t *testing.T) {
 	// serviceTags: resource attribute service_version.
 	svcTags := decodeKVs(t, fieldByName(t, frame, "serviceTags").At(0))
 	foundVersion := false
+	foundService := false
 	for _, kv := range svcTags {
+		if kv.Key == "service.name" && kv.Value == "frontend" && kv.Type == "string" {
+			foundService = true
+		}
 		if kv.Key == "service_version" {
 			foundVersion = true
 		}
 	}
 	if !foundVersion {
 		t.Errorf("serviceTags missing service_version: %+v", svcTags)
+	}
+	if !foundService {
+		t.Errorf("serviceTags missing canonical service.name for trace-to-logs: %+v", svcTags)
 	}
 
 	// logs: one event "exception" with ns->ms timestamp and a field.

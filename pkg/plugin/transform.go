@@ -127,6 +127,9 @@ func buildTraceFrame(hits []map[string]json.RawMessage, executedSQL string) *dat
 		// span attributes -> tags / serviceTags.
 		spanTags := make([]keyValue, 0, len(hit))
 		svcTags := make([]keyValue, 0)
+		if serviceName[i] != "" {
+			svcTags = append(svcTags, keyValue{Key: "service.name", Value: serviceName[i], Type: "string"})
+		}
 		sawError := false
 		for k, raw := range hit {
 			if reserved[k] {
