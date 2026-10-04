@@ -30,7 +30,9 @@ test('trace search returns seeded rows without a raw SQL escape hatch', async ({
   await expect(queryEditor.getByRole('textbox', { name: /Raw (WHERE|SQL)/i })).toHaveCount(0);
 
   const queryRequest = panelEditPage.waitForQueryDataRequest();
-  await expect(panelEditPage.refreshPanel()).toBeOK();
+  const queryResponse = panelEditPage.waitForQueryDataResponse();
+  await queryEditor.getByRole('textbox', { name: 'Tag 1 value' }).press('Enter');
+  await expect(queryResponse).toBeOK();
   const requestBody = (await queryRequest).postData() ?? '';
 
   expect(requestBody).not.toContain('rawWhere');
