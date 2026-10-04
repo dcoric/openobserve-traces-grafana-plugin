@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * Trace simulation generator for the local dev stack.
+ * Trace and log simulation generator for the local dev stack.
  *
  * Emits realistic multi-service traces as OTLP/JSON over HTTP to the OTel
- * Collector (which forwards them to OpenObserve). No npm dependencies — runs
- * with plain Node >= 18 (global fetch), so it works both from the host and as
- * a one-shot `node:22-alpine` compose service.
+ * Collector (which forwards traces to OpenObserve and logs to OpenObserve
+ * and Loki). No npm dependencies; runs with Node 24 from the host or as
+ * a one-shot `node:24-alpine` compose service.
  *
  * Environment:
  *   OTLP_HTTP_ENDPOINT  collector OTLP/HTTP base URL (default http://localhost:4318)
@@ -22,9 +22,9 @@
  *   TRACE_COUNT=1000 TIME_SPREAD_MINUTES=360 node dev/seed/generate-traces.mjs
  *
  * NOTE on TIME_SPREAD_MINUTES: OpenObserve silently drops spans older than
- * ZO_INGEST_ALLOWED_UPTO hours (default 5) — and because this script posts to
- * the collector, o2's rejection response never reaches it, so drops are
- * invisible here. docker-compose.yaml sets ZO_INGEST_ALLOWED_UPTO=24; keep the
+ * ZO_INGEST_ALLOWED_UPTO hours (default 5). The collector accepts requests
+ * before delivery, so the subsequent indexing check detects missing spans.
+ * Compose sets ZO_INGEST_ALLOWED_UPTO=24; keep the
  * spread comfortably below that (or below ~270 min against a default o2).
  */
 
