@@ -1,214 +1,103 @@
-# Live-instance validation checklist
+# Validation record
 
-> **Split status (2026-07-17):** §§0–7 below record the prior local emulation
-> run (`docs/DEV-ENVIRONMENT.md`: OpenObserve **v0.91.2**, single-node,
-> S3-backed, OTLP-ingested simulated traces), including the committed ground
-> truth at [`pkg/plugin/testdata/live_trace_v0.91.2.json`](../pkg/plugin/testdata/live_trace_v0.91.2.json).
-> The hardened query, limit, warning, and frontend paths were changed after
-> that run and are covered by current unit/component tests. The local `dist/`
-> backend is stale and host Mage is unavailable, so fresh runtime acceptance,
-> §8, and GR production validation remain pending.
+## Current local acceptance: 2026-10-04
 
-The original field mapping was source-derived and then checked against the
-prior local run. This document remains the live-instance gate: do not treat
-unit tests or stale binaries as current acceptance against a rebuilt backend or
-GR deployment.
+This refresh rebuilt the frontend with webpack and all six backend targets with
+Mage. Runtime checks used OpenObserve v0.91.2, collector 0.156.0, RustFS
+1.0.0-beta.10 and Loki 3.7.0. The local stack uses development credentials;
+these results do not establish production deployment acceptance.
 
-The sections below cover field mapping, parent-child relationships, status,
-attributes, events and links, filtering, authentication, and large-trace
-handling. The sign-off records prior evidence and clearly identifies checks
-that still require a fresh backend or deployment environment.
+| Check                  | Evidence and result                                                                                                                                                                                                               |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Frontend               | `npm run typecheck`, `npm run lint`, and all 51 Jest tests passed. Plugin-owned deprecated HTTP settings and Select usages were replaced. The ESLint dependency still prints its package deprecation notice.                      |
+| Backend                | `go test -race ./pkg/...` and `mage buildAll` passed. Unit tests cover SQL filtering, time conversions, events/links, authentication errors, limits, and warnings.                                                                |
+| Seed                   | `node --test dev/seed/*.test.mjs` passed. A Compose seed with random seed 1 indexed 251 complete traces / 6,361 spans and verified matching Loki logs.                                                                            |
+| Local browser suite    | All eight tests passed on Grafana 12.0.0, 13.0.10, 13.2.3 and nightly 13.3.0-34793047961. Tests use the plugin-e2e fixtures and provisioned datasource/dashboard definitions.                                                     |
+| CI browser matrix      | [Runtime PR #36](https://github.com/dcoric/openobserve-traces-grafana-plugin/pull/36) passed Grafana 12.0.10, 12.1.10, 12.3.11, 13.0.10, 13.2.3 and nightly on commit `91cba3d`, including seed readiness.                        |
+| Native trace workflows | `tests/nativeTrace.spec.ts` clicks the search result link, verifies the waterfall, opens an error span and resource attributes, expands the node graph, and follows the native logs link to a matching error log.                 |
+| Large trace            | A real 5,001-span trace produces a 5,000-span waterfall and the visible tooltip: "Trace contains more than 5000 spans; showing the first 5000 spans."                                                                             |
+| Time range             | The same trace renders when the selected range is four minutes before or after its start, exercising both sides of the five-minute padding. A range six minutes after it returns zero spans. Invalid IDs show a validation error. |
+| Configuration          | Save & test, secure Basic Auth, TLS controls and tag mappings passed browser/component checks. Manual light/dark checks covered desktop and 390px widths.                                                                         |
+| Storage                | AWS CLI listed indexed objects in the RustFS `openobserve` bucket. Restart-based persistence was established in the historical mapping run below, not repeated in this refresh.                                                   |
 
-For each item: **(a)** what we assume, **(b)** how to check it, **(c)** where to
-fix it if the assumption is wrong.
+The refresh is tracked by [#25](https://github.com/dcoric/openobserve-traces-grafana-plugin/issues/25),
+[#26](https://github.com/dcoric/openobserve-traces-grafana-plugin/issues/26),
+[#27](https://github.com/dcoric/openobserve-traces-grafana-plugin/issues/27), and
+[#28](https://github.com/dcoric/openobserve-traces-grafana-plugin/issues/28).
+Their linked PR checks contain the fresh CI build, compatibility and browser
+matrix evidence. CI starts a new Compose stack for each Grafana matrix job and
+waits for successful seed indexing before running tests.
 
-## 0. Capture ground truth
+## Defects found by runtime testing
 
-Pick one trace you can also open in OpenObserve's own UI. Then dump the raw
-search response the plugin will parse:
+Grafana's native trace-to-logs integration matches resource tags. The backend
+now emits `service.name` from OpenObserve's `service_name`, so the configured
+mapping to Loki's `service_name` label works. Log records contain both the
+OTLP trace/span context and those IDs in the line body for Grafana version
+compatibility.
 
-```bash
-ORG=default
-STREAM=default
-TRACE_ID=<32-hex-trace-id>
-curl -s -u "$EMAIL:$PASSWORD" \
-  "http://<o2-host>:5080/api/$ORG/_search?type=traces" \
-  -H 'Content-Type: application/json' \
-  -d "{\"query\":{\"sql\":\"SELECT * FROM \\\"$STREAM\\\" WHERE trace_id='$TRACE_ID' ORDER BY start_time\",\"start_time\":<from_micros>,\"end_time\":<to_micros>,\"from\":0,\"size\":5000}}" \
-  | jq '.hits[0]'
-```
+OpenObserve v0.91.2 can report `total` equal to the fetched page size. Comparing
+that field with returned hits missed larger traces. Trace lookup now requests
+5,001 spans, detects the extra row, and caps both waterfall and graph input at
+5,000. It does not claim an exact total beyond the cap or provide pagination.
 
-Keep this `hits[0]` JSON; it answers most items below. The captured local
-response is now exercised by `pkg/plugin/transform_fixture_test.go`.
+## Package validation
 
-## 1. Time units (highest risk)
+The built archive includes the frontend, backend binaries, packaged README,
+plugin metadata and real seeded-data screenshots. CI runs the official
+`metadatavalid` analyzer on unsigned PR artifacts. The full official validator
+was also run locally; its deployment findings are separate from build and
+runtime acceptance:
 
-| Assumption                                              | Check on `hits[0]`           | Fix if wrong                                                                                                                                              |
-| ------------------------------------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `start_time` / `end_time` are **nanoseconds**           | ~19 digits (e.g. `1.7e18`)   | `epochToMillis` auto-detects by magnitude, so a shift to µs/ms is handled — but confirm the rendered span start matches the o2 UI.                        |
-| `duration` is **microseconds**                          | a span of ~1ms shows `~1000` | If it is ns or ms, change the `÷ 1000` in `transform.go` (`buildTraceFrame`) and `nodegraph.go`. **This is NOT magnitude-detectable** — it must be right. |
-| event `_timestamp` (inside `events`) is **nanoseconds** | ~19 digits                   | `epochToMillis` handles it; confirm event markers land at the right offset in the waterfall.                                                              |
+The final local run reported **1 error and 3 warnings**. Of 40 analyzer
+completion events, 37 had no findings. The metadata-only run passed.
 
-**Acceptance:** the waterfall's total duration, each span's start offset, and bar
-widths match OpenObserve's own trace view for the same trace.
+- Organization lookup fails because the validator cannot find a Grafana Cloud
+  account for the unchanged `gresearch` namespace. Namespace ownership must be
+  resolved by the publisher before distribution.
+- The local archive is unsigned. No signing token or production signature was
+  created during this refresh.
+- The standard Apache license appendix contains generic example placeholders,
+  which the validator flags. The repository's license text was preserved.
+- The initial missing-screenshot warning is addressed by the screenshots in
+  `src/img/` and metadata entries in `src/plugin.json`.
 
-## 2. Parent / child structure
+A successful metadata check is not a full validator pass. Optional analyzers
+that require external tools or configuration are not claimed as completed
+security scans. The release workflow requires `GRAFANA_ACCESS_POLICY_TOKEN`,
+creates a draft release and runs the full validator. Publish only after that
+release's validation passes.
 
-- **Assume:** the column is `reference_parent_span_id`; empty/absent ⇒ root span.
-- **Check:** is the column present on every row? Does the root span have it empty?
-  OpenObserve only materializes it when at least one child span exists.
-- **Fix:** the transform already treats missing/empty as root. If the real column
-  name differs (e.g. nested `reference.parent_span_id`), update the `reserved`
-  set and the `decodeString(hit["reference_parent_span_id"])` lookup in
-  `transform.go`, and the `buildSearchSQL` root-name logic.
+## Historical mapping evidence: 2026-07-17
 
-**Acceptance:** spans nest correctly (no flat list, no orphans) and exactly one
-root is shown.
+The captured response in
+[`pkg/plugin/testdata/live_trace_v0.91.2.json`](../pkg/plugin/testdata/live_trace_v0.91.2.json)
+remains a regression fixture. That local run established:
 
-## 3. span_kind & status
+- Span start/end and event timestamps are nanoseconds. `duration` is
+  microseconds: a 27,929,851ns interval stored duration 27,929 and rendered
+  27.929ms. Absolute timestamps use magnitude detection; relative duration
+  uses a fixed division by 1,000.
+- Child spans use `reference_parent_span_id`; roots omit it. Numeric span kind
+  strings and OK/ERROR/UNSET statuses map to Grafana's fields.
+- Resource columns were prefixed with `service_`, including
+  `service_k8s_pod_name`. Events and links were JSON strings; link contexts used
+  camelCase traceId/spanId. The parser also accepts arrays.
+- All 1,260 ingested spans arrived, Parquet reached RustFS, and trace reads
+  still worked after OpenObserve restarted.
 
-- **Assume:** `span_kind` is `"0".."5"` or `"SPAN_KIND_*"`; `span_status` is
-  `OK`/`ERROR`/`UNSET`; `status_code`/`status_message` may be present.
-- **Check:** the literal values on real rows.
-- **Fix:** extend `normalizeSpanKind` / `statusCodeFromString` in `transform.go`.
+## Remaining limits and production acceptance
 
-**Acceptance:** client/server icons render correctly; errored spans are red.
+Resource/span attribute classification still uses prefixes. A span attribute
+such as `host_name` can be classified as a resource attribute. Schema discovery
+improves the filter picker; it does not replace that classification heuristic.
+Grafana's Explore host maintains a minimum pane width at phone sizes, so the
+390px view can scroll horizontally even though the plugin's own grid fits its
+assigned width. Configuration fields fit the narrow viewport.
 
-## 4. Attributes: tags vs serviceTags
-
-- **Assume:** span attributes are flattened to top-level columns (dots →
-  underscores, e.g. `http.method` → `http_method`); resource attributes share the
-  same flat namespace and are split out by prefix heuristic (`service_`, `k8s_`,
-  `host_`, `os_`, `process_`, `container_`, `cloud_`, …).
-- **Check:** call the schema resource and inspect column names:
-  `GET /api/{org}/streams/{stream}/schema?type=traces`. Are resource attributes
-  actually prefixed? Any colliding keys prefixed `attr_`?
-- **Fix:** adjust `resourcePrefixes` / `reserved` in `transform.go`. If the prefix
-  heuristic is unreliable, switch to a schema-driven classification using the
-  `schema` CallResource endpoint (already wired in `datasource.go`).
-
-**Acceptance:** the span detail panel shows attributes under the right sections
-and key names are the ones you expect.
-
-## 5. events & links JSON
-
-- **Assume:** `events` and `links` are **JSON-encoded strings** (parse twice);
-  empty is `"[]"`. Event keys: `name`, `_timestamp`, attrs. Link keys:
-  `context.{traceId,spanId}` (camelCase), `droppedAttributesCount`, attrs.
-- **Check:** `jq '.hits[0].events, .hits[0].links'` — string or array? key casing?
-- **Fix:** `decodeJSONStringArray` already tolerates both string and array forms;
-  adjust key names in `parseEvents` / `parseLinks` if casing differs.
-
-**Acceptance:** span logs (events) and references (links) appear with correct
-timestamps and attributes.
-
-## 6. Search results (table)
-
-- **Implemented:** `buildSearchSQL` uses conditional `HAVING` aggregation:
-  span predicates are combined in one CASE expression so they match the same
-  span, while all spans from selected traces remain available for counts,
-  duration, services, and first-name fields. Go unit tests cover the generated
-  SQL and the 500-trace search limit.
-- **Prior local check:** the pre-hardening `GROUP BY trace_id` query and
-  `first_value(... ORDER BY ...)`/`count(DISTINCT ...)` forms were accepted by
-  OpenObserve v0.91.2. This is not current acceptance of the changed backend.
-- **Check:** run a Search query; confirm the table populates with trace id, name,
-  service, duration, span/error counts.
-- **Fix:** if `first_value(... ORDER BY ...)` is unsupported, fall back to
-  `GET /api/{org}/{stream}/traces/latest` (documented; returns `first_event`).
-
-**Acceptance:** after a fresh Mage build, verify filtered table summaries match
-the unfiltered trace-by-id waterfall. Raw `rawWhere`/`rawSql` inputs are not
-supported. Search requests above 500 are rejected; this is a cap, not
-pagination or an unlimited-size contract.
-
-## 7. Auth & connectivity
-
-- **Check:** _Save & test_ succeeds. Confirm whether the instance accepts Basic
-  auth with email\:password, or requires a service-account / API token (used as
-  the Basic-auth password). SSO-only instances may reject Basic auth entirely.
-- **Fix:** Basic auth + TLS are handled by Grafana's HTTP settings; no code change
-  expected — this is a deployment/config check.
-
-## 8. size = 5000 cap & time window
-
-- **Implemented:** the compose seed includes a deterministic
-  `LARGE_TRACE_SPAN_COUNT=5001` scenario (set to 0 to disable), logs its trace
-  ID, and supports optional `REFERENCE_TIME_MS` while defaulting to current
-  time. Determinism is structural by default (scenario mix, span counts, IDs
-  via the pinned `SEED_RANDOM_SEED`); set `REFERENCE_TIME_MS` as well when
-  timestamps must be reproducible, and record the exact invocation. Trace
-  lookup compares OpenObserve `total` with returned hits and emits a visible
-  truncation warning when `total > hits`; search results that fill the requested
-  limit warn that more may match.
-- **Check (still pending live):** does a large trace exceed
-  `maxSpansPerTrace` (5000)? Does a trace near the edge of the dashboard range
-  get found (±5 min pad)? Run both against a freshly built backend.
-- **Possible fix after evidence:** tune `maxSpansPerTrace` /
-  `traceIDWindowPadMicros`, or experimentally evaluate another retrieval policy;
-  do not assume `size: -1`, pagination, or unlimited trace retrieval is
-  supported.
-
----
-
-## Sign-off
-
-Prior local verification on 2026-07-17 used the emulation (o2 v0.91.2,
-OTLP-seeded data). It is retained as historical evidence; current hardening
-requires fresh Mage-built backend/runtime revalidation.
-
-- [x] §1 timings — `start_time`/`end_time` are **ns** (19 digits), event
-      `_timestamp` is **ns**, and **`duration` is µs confirmed**: on a real
-      span, `end_time − start_time` = 27,929,851 ns and `duration` = 27,929.
-      Plugin renders 27.929 ms — matches exactly. (The one non-detectable
-      conversion is right.)
-- [x] §2 spans nest with a single root — `reference_parent_span_id` present on
-      children, absent on the root; `reference_parent_trace_id` /
-      `reference_ref_type` also exist as columns.
-- [x] §3 kinds/status — `span_kind` is a string digit (`"2"`, `"3"` observed);
-      `span_status` `OK`/`ERROR`/`UNSET`; `status_code` int 0/1/2;
-      `status_message` populated on errors (`card_declined`).
-- [x] §4 attributes sectioned — with a caveat: o2 v0.91.2 prefixes **all**
-      resource attributes uniformly with `service_` (`service_k8s_pod_name`,
-      `service_service_version`, …), so the heuristic classifies this data
-      correctly via its `service_` prefix alone. The other prefixes (`k8s_`,
-      `host_`, …) never occur as resource columns — a _span_ attribute named
-      e.g. `host_name` would be misclassified. Schema-driven split remains the
-      right long-term fix, though this limitation is lower risk than assumed.
-- [x] §5 events/links — both are JSON **strings**. Events:
-      `name`, `_timestamp` (ns), attribute keys keep **dots**
-      (`exception.message`). Links: `context.{traceId,spanId}` camelCase +
-      `droppedAttributesCount`, attrs alongside. Parsed and rendered correctly.
-- [x] §6 implementation/unit coverage — conditional aggregate `HAVING` keeps
-      full-trace summaries while requiring combined span filters on one span;
-      strict trace IDs, raw-SQL removal, and max search limit are tested.
-- [ ] §6 fresh runtime acceptance — rerun filtered search and drill-down with a
-      freshly built backend; the prior local result predates these changes.
-- [x] §7 Save & test — Basic `email:password` (root user) accepted for both
-      queries and OTLP ingestion; health check returns "Connected to
-      OpenObserve".
-- [x] §8 implementation coverage — 5,001-span deterministic seed, current-time
-      default, optional reference time, and total-vs-hits warning are present.
-- [ ] §8 live cap/window behavior — **still open**; verify truncation and the
-      ±5-minute edge window against a fresh backend. No pagination or unlimited
-      size is claimed.
-
-The prior run also verified end-to-end: OTLP → collector → o2 with **zero span loss**
-(1,260/1,260), Parquet written to the S3 bucket (RustFS), and full trace reads
-after an o2 restart (served from S3, not memtable).
-
-**Automated quality and packaging — partially evidenced:** frontend
-typecheck (`npm run typecheck`), Jest (`npm run test:ci`), backend Go tests
-with race detector (`go test -race ./pkg/...`), and lint (`npm run lint`, 0
-errors / 5 documented deprecation warnings) all passed locally on 2026-07-17
-on the then-current working tree — re-run them against the current tree before
-citing this line as evidence. Still pending: a fresh Mage backend package,
-runtime E2E against it, and a full official-validator pass on the packaged
-plugin. The release workflow runs the full validator on the built archive;
-note the GitHub release is created as a **draft** first — publish only after the
-"Validate plugin" step is green. CI runs the `metadatavalid` analyzer on
-unsigned PR artifacts.
-
-**Deployment readiness — open:** GR's Grafana and o2 version pins, auth mode,
-org/stream names, distribution/signing form, the trace-to-log decision, and a
-§1 timing spot-check on a real production trace.
+Before deploying, confirm the target Grafana and OpenObserve versions, TLS and
+authentication, organization and stream names, logs datasource/label mappings,
+and signing/distribution ownership. Spot-check a production trace's timing,
+parent relationships, events and links against OpenObserve itself. Local Loki
+correlation does not establish compatibility with an arbitrary logs plugin or
+the production log streams.
