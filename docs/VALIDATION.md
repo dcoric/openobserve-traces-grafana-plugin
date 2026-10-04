@@ -68,6 +68,13 @@ security scans. The release workflow requires `GRAFANA_ACCESS_POLICY_TOKEN`,
 creates a draft release and runs the full validator. Publish only after that
 release's validation passes.
 
+The dependency refresh also leaves transitive npm audit findings, documented
+in [#29](https://github.com/dcoric/openobserve-traces-grafana-plugin/pull/29)
+and [#35](https://github.com/dcoric/openobserve-traces-grafana-plugin/pull/35).
+Automatic fixes proposed unrelated major upgrades or Grafana downgrades for
+the affected dependency chains. Those changes were not forced; review upstream
+fixes and deployment exposure before production acceptance.
+
 ## Historical mapping evidence: 2026-07-17
 
 The captured response in
