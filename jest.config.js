@@ -12,5 +12,7 @@ module.exports = {
     ...grafanaConfig.moduleNameMapper,
     '^react-dom/server$': 'react-dom/server.node',
   },
-  transformIgnorePatterns: [nodeModulesToTransform([...grafanaESModules, '@react-hookz/web', '@ver0/deep-equal'])],
+  transformIgnorePatterns: [
+    nodeModulesToTransform([...grafanaESModules, '@react-hookz/web', '@ver0/deep-equal', '@marcbachmann/cel-js']),
+  ],
 };
