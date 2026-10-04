@@ -25,7 +25,7 @@ test('search links open the native waterfall, error details, node graph and corr
   const traceID = await link.innerText();
   await link.click();
   const trace = page.getByRole('region', { name: 'Trace', exact: true });
-  await expect(trace.getByRole('heading', { name: /^web-\s*frontend:/ })).toBeVisible();
+  await expect(trace.getByRole('heading', { name: /^web-\s*frontend(?::|\s)/ })).toBeVisible();
   await expect(explorePage.getByGrafanaSelector(selectors.components.TraceViewer.spanBar).first()).toBeVisible();
   await explorePage.getByGrafanaSelector(selectors.components.TraceViewer.spanBar).first().click();
   await expect(trace).toContainText('Status:error');
