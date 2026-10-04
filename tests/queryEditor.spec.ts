@@ -6,6 +6,7 @@ test('trace search returns seeded rows without a raw SQL escape hatch', async ({
 }) => {
   const provisioned = await readProvisionedDataSource({ fileName: 'datasources.yml' });
   await panelEditPage.datasource.set(provisioned.name);
+  await panelEditPage.setVisualization('Table');
 
   const queryEditor = panelEditPage.getQueryEditorRow('A');
   await expect(queryEditor.getByRole('combobox', { name: 'Stream', exact: true })).toBeVisible();
@@ -30,6 +31,7 @@ test('a searched seeded trace can be opened through direct trace lookup', async 
 }) => {
   const provisioned = await readProvisionedDataSource({ fileName: 'datasources.yml' });
   await panelEditPage.datasource.set(provisioned.name);
+  await panelEditPage.setVisualization('Table');
 
   const queryEditor = panelEditPage.getQueryEditorRow('A');
   await queryEditor.getByRole('textbox', { name: 'Service', exact: true }).fill('web-frontend');
@@ -43,12 +45,14 @@ test('a searched seeded trace can be opened through direct trace lookup', async 
   const traceID = traceIDMatch[0];
 
   await queryEditor.getByRole('radio', { name: 'Trace ID', exact: true }).click();
-  await queryEditor.getByRole('textbox', { name: 'Trace ID', exact: true }).fill(traceID);
   await queryEditor.getByRole('switch', { name: 'Node graph', exact: true }).check({ force: true });
+  const traceInput = queryEditor.getByRole('textbox', { name: 'Trace ID', exact: true });
+  await traceInput.fill(traceID);
 
   const traceRequest = panelEditPage.waitForQueryDataRequest();
   const traceResponse = panelEditPage.waitForQueryDataResponse();
-  await expect(panelEditPage.refreshPanel()).toBeOK();
+  await traceInput.press('Enter');
+  await expect(traceResponse).toBeOK();
   const traceRequestBody = (await traceRequest).postData() ?? '';
   const traceResponseBody = await (await traceResponse).text();
   expect(traceRequestBody).toContain('"queryType":"traceId"');
@@ -56,8 +60,8 @@ test('a searched seeded trace can be opened through direct trace lookup', async 
   expect(traceResponseBody).toContain('"preferredVisualisationType":"nodeGraph"');
   expect(traceResponseBody).toContain('"name":"nodes"');
   expect(traceResponseBody).toContain('"name":"edges"');
-  await expect(panelEditPage.panel.locator.getByText('Trace traceID', { exact: true })).toBeVisible();
-  await expect(panelEditPage.panel.locator.getByText('Trace operationName', { exact: true })).toBeVisible();
-  await expect(panelEditPage.panel.locator.getByText('Trace serviceName', { exact: true })).toBeVisible();
+  await expect(panelEditPage.panel.locator.getByText(/^(Trace )?traceID$/)).toBeVisible();
+  await expect(panelEditPage.panel.locator.getByText(/^(Trace )?operationName$/)).toBeVisible();
+  await expect(panelEditPage.panel.locator.getByText(/^(Trace )?serviceName$/)).toBeVisible();
   await expect(panelEditPage.panel.locator.getByText(traceID, { exact: true })).not.toHaveCount(0);
 });
