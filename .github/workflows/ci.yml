@@ -212,8 +212,11 @@ jobs:
 
       - name: Wait for indexed seed data
         run: |
-          docker compose wait seed
-          test "$(docker inspect --format '{{.State.ExitCode}}' "$(docker compose ps -aq seed)")" = 0
+          seed_container=$(docker compose ps -aq seed)
+          test -n "$seed_container"
+          seed_exit=$(docker wait "$seed_container")
+          docker compose logs seed
+          test "$seed_exit" = 0
 
       - name: Run Playwright tests
         id: run-tests
@@ -225,6 +228,7 @@ jobs:
           docker logs gresearch-openobservetraces-datasource >& grafana-server.log
 
       - name: Stop grafana docker
+        if: always()
         run: docker compose down
 
       # Uncomment this step to upload the server log to Github artifacts. Remember Github artifacts are public on the Internet if the repository is public.
