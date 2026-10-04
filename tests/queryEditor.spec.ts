@@ -14,8 +14,19 @@ test('trace search returns seeded rows without a raw SQL escape hatch', async ({
   await expect(queryEditor.getByRole('combobox', { name: 'Stream', exact: true })).toBeVisible();
   await queryEditor.getByRole('textbox', { name: 'Service', exact: true }).fill('web-frontend');
   await queryEditor.getByRole('textbox', { name: 'Span name', exact: true }).fill('GET /api/products');
+  await queryEditor.getByRole('textbox', { name: 'Min duration', exact: true }).fill('invalid');
+  await expect(queryEditor.getByText(/Use a non-negative duration/)).toBeVisible();
   await queryEditor.getByRole('textbox', { name: 'Min duration', exact: true }).fill('1ms');
   await queryEditor.getByRole('textbox', { name: 'Max duration', exact: true }).fill('2s');
+  await queryEditor.getByRole('button', { name: 'Add tag filter' }).press('Enter');
+  const attribute = queryEditor.getByRole('combobox', { name: 'Tag 1 attribute', exact: true });
+  await attribute.fill('http_method');
+  await expect(
+    queryEditor.locator('xpath=ancestor::body').getByRole('option', { name: 'http_method', exact: true })
+  ).toBeVisible();
+  await attribute.press('Enter');
+  await expect(attribute).toHaveValue('http_method');
+  await queryEditor.getByRole('textbox', { name: 'Tag 1 value' }).fill('GET');
   await expect(queryEditor.getByRole('textbox', { name: /Raw (WHERE|SQL)/i })).toHaveCount(0);
 
   const queryRequest = panelEditPage.waitForQueryDataRequest();
