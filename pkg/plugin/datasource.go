@@ -142,14 +142,18 @@ func (d *Datasource) queryTraceByID(ctx context.Context, query backend.DataQuery
 	from := query.TimeRange.From.UnixMicro() - traceIDWindowPadMicros
 	to := query.TimeRange.To.UnixMicro() + traceIDWindowPadMicros
 
-	resp, err := d.client.Search(ctx, "traces", sql, from, to, 0, maxSpansPerTrace)
+	resp, err := d.client.Search(ctx, "traces", sql, from, to, 0, maxSpansPerTrace+1)
 	if err != nil {
 		return backend.ErrDataResponse(backend.StatusBadGateway, err.Error())
 	}
 
 	var r backend.DataResponse
-	traceFrame := buildTraceFrame(resp.Hits, sql)
 	warning := resp.Warning()
+	if len(resp.Hits) > maxSpansPerTrace {
+		resp.Hits = resp.Hits[:maxSpansPerTrace]
+		warning = strings.TrimSpace(warning + " " + fmt.Sprintf("Trace contains more than %d spans; showing the first %d spans.", maxSpansPerTrace, maxSpansPerTrace))
+	}
+	traceFrame := buildTraceFrame(resp.Hits, sql)
 	attachWarning(traceFrame, warning)
 	r.Frames = append(r.Frames, traceFrame)
 

@@ -1,5 +1,15 @@
 import React, { ChangeEvent, useEffect, useId, useState } from 'react';
-import { Alert, Field, InlineSwitch, Input, RadioButtonGroup, Select, Stack, useStyles2 } from '@grafana/ui';
+import {
+  Alert,
+  Combobox,
+  Field,
+  InlineSwitch,
+  Input,
+  RadioButtonGroup,
+  Stack,
+  useStyles2,
+  type ComboboxOption,
+} from '@grafana/ui';
 import type { QueryEditorProps, SelectableValue } from '@grafana/data';
 import { DataSource } from '../datasource';
 import { O2DataSourceOptions, O2Query, O2QueryType } from '../types';
@@ -17,7 +27,7 @@ export function QueryEditor({ query, onChange, onRunQuery, datasource }: Props) 
   const queryType: O2QueryType = query.queryType ?? 'search';
   const idPrefix = `query-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
   const styles = useStyles2(getQueryEditorStyles);
-  const [streamOptions, setStreamOptions] = useState<Array<SelectableValue<string>>>([]);
+  const [streamOptions, setStreamOptions] = useState<Array<ComboboxOption<string>>>([]);
   const [streamError, setStreamError] = useState<string>();
   const [streamLoading, setStreamLoading] = useState(true);
 
@@ -58,20 +68,13 @@ export function QueryEditor({ query, onChange, onRunQuery, datasource }: Props) 
   };
 
   const streamSelector = (
-    <Field
-      className={styles.field}
-      label={
-        <FieldLabel label="Stream" tooltip="Trace stream to query (defaults to the datasource's default stream)." />
-      }
-      htmlFor={`${idPrefix}-stream`}
-    >
-      <Select
-        className={styles.control}
+    <Field className={styles.field} label="Stream" htmlFor={`${idPrefix}-stream`}>
+      <Combobox
         aria-label="Stream"
-        inputId={`${idPrefix}-stream`}
+        id={`${idPrefix}-stream`}
         isClearable
-        allowCustomValue
-        isLoading={streamLoading}
+        createCustomValue
+        loading={streamLoading}
         placeholder="default stream"
         options={streamOptions}
         value={query.stream ?? null}
@@ -93,8 +96,8 @@ export function QueryEditor({ query, onChange, onRunQuery, datasource }: Props) 
         />
 
         {streamError && (
-          <Alert title="Unable to load streams" severity="error" aria-live="assertive">
-            {streamError}
+          <Alert title="Unable to load streams" severity="warning">
+            {streamError} You can still enter a stream name manually.
           </Alert>
         )}
 
@@ -132,6 +135,7 @@ export function QueryEditor({ query, onChange, onRunQuery, datasource }: Props) 
           </>
         ) : (
           <QuerySearchEditor
+            datasource={datasource}
             query={query}
             onChange={onChange}
             onRunQuery={onRunQuery}
