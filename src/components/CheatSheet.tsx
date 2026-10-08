@@ -10,11 +10,13 @@ export function CheatSheet(_props: QueryEditorHelpProps<O2Query>) {
       <ul>
         <li>
           <strong>Search</strong> — find traces by service, span/operation name, duration, error status and attribute
-          filters. Results appear as a table; click a trace id to open the full waterfall.
+          filters. Returns 50 traces by default and at most 500. If a page is full, more traces may match; narrow the
+          filters or time range to see them. Click a trace id to open the full waterfall.
         </li>
         <li>
-          <strong>Trace ID</strong> — fetch every span of one trace by its 32-character hexadecimal id and render the
-          waterfall directly.
+          <strong>Trace ID</strong> — enter the 32-character hexadecimal id of one trace and render its waterfall. At
+          most 5,000 spans are shown. If the trace is larger, a warning is displayed. The selected time range is widened
+          by five minutes on each side, so the trace must fall within that window to be found.
         </li>
       </ul>
       <p>
