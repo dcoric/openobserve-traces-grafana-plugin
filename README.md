@@ -70,6 +70,7 @@ Pagination, unlimited retrieval and raw SQL input are not provided.
 Production authentication and logs integration depend on the target deployment.
 Verify its versions, stream names, TLS and label mappings before rollout.
 
+Contributing? See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, checks and the pull request process.
 ## Build and test
 
 ```bash
