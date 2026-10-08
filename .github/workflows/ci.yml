@@ -93,9 +93,10 @@ jobs:
         if: ${{ github.event_name == 'push' }}
         env:
           GRAFANA_ACCESS_POLICY_TOKEN: ${{ secrets.GRAFANA_ACCESS_POLICY_TOKEN }}
+          SIGN_ROOT_URL: ${{ vars.SIGN_ROOT_URL }}
         run: |
           if [ -n "$GRAFANA_ACCESS_POLICY_TOKEN" ]; then
-            npm run sign
+            npm run sign -- --rootUrls "${SIGN_ROOT_URL:-http://localhost:3000}"
           else
             echo "GRAFANA_ACCESS_POLICY_TOKEN is not configured; leaving this push artifact unsigned"
           fi
