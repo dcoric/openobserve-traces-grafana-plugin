@@ -1,24 +1,26 @@
 import React, { ChangeEvent } from 'react';
 import {
-  DataSourceHttpSettings,
+  Button,
+  Combobox,
   Field,
   FieldSet,
   Input,
   InlineSwitch,
-  Select,
+  IconButton,
   Stack,
-  TagsInput,
-  Tooltip,
   useStyles2,
+  type ComboboxOption,
 } from '@grafana/ui';
+import { AdvancedHttpSettings, Auth, AuthMethod, ConnectionSettings, convertLegacyAuthProps } from '@grafana/plugin-ui';
 import { getDataSourceSrv } from '@grafana/runtime';
-import type { DataSourcePluginOptionsEditorProps, GrafanaTheme2, SelectableValue } from '@grafana/data';
+import type { DataSourcePluginOptionsEditorProps, GrafanaTheme2 } from '@grafana/data';
 import { css } from '@emotion/css';
 import { O2DataSourceOptions, O2SecureJsonData, TraceToLogsOptions } from '../types';
+import { FieldLabel } from './QueryEditorStyles';
 
 interface Props extends DataSourcePluginOptionsEditorProps<O2DataSourceOptions, O2SecureJsonData> {}
 
-const SHIFT_OPTIONS: Array<SelectableValue<string>> = [
+const SHIFT_OPTIONS: Array<ComboboxOption<string>> = [
   { label: 'None', value: '0' },
   { label: '-1m', value: '-1m' },
   { label: '-5m', value: '-5m' },
@@ -40,9 +42,19 @@ const getStyles = (theme: GrafanaTheme2) => {
     },
   });
   return {
-    root: css({ width: '100%', minWidth: 0, maxWidth: '100%', overflowX: 'hidden' }),
-    httpSettings: css({ width: '100%', minWidth: 0, maxWidth: '100%', overflowX: 'auto' }),
-    section: css({ width: '100%', minWidth: 0, maxWidth: '100%', overflowX: 'hidden' }),
+    root: css({ width: '100%', minWidth: 0, maxWidth: '100%' }),
+    httpSettings: css({
+      containerType: 'inline-size',
+      '& div:has(> label[for])': {
+        '@container (max-width: 32rem)': {
+          flexDirection: 'column',
+          alignItems: 'stretch',
+          '> label': { width: 'auto' },
+          '> div': { minWidth: 0, flexShrink: 1, width: '100%' },
+        },
+      },
+    }),
+    section: css({ width: '100%', minWidth: 0, maxWidth: '100%' }),
     grid: css({
       display: 'grid',
       width: '100%',
@@ -55,17 +67,6 @@ const getStyles = (theme: GrafanaTheme2) => {
     control,
   };
 };
-
-function FieldLabel({ label, tooltip }: { label: string; tooltip?: string }) {
-  if (!tooltip) {
-    return label;
-  }
-  return (
-    <Tooltip content={tooltip}>
-      <span>{label}</span>
-    </Tooltip>
-  );
-}
 
 export function ConfigEditor(props: Props) {
   const { onOptionsChange, options } = props;
@@ -83,7 +84,7 @@ export function ConfigEditor(props: Props) {
   const t2l = jsonData.tracesToLogsV2 ?? {};
   const logDatasourceOptions = getDataSourceSrv()
     .getList({ logs: true })
-    .map<SelectableValue<string>>((dataSource) => ({ label: dataSource.name, value: dataSource.uid }));
+    .map<ComboboxOption<string>>((dataSource) => ({ label: dataSource.name, value: dataSource.uid }));
   const selectedLogDatasource = t2l.datasourceUid
     ? (logDatasourceOptions.find((option) => option.value === t2l.datasourceUid) ?? {
         label: `${t2l.datasourceUid} (not found)`,
@@ -94,14 +95,23 @@ export function ConfigEditor(props: Props) {
   return (
     <div className={styles.root}>
       <Stack direction="column" gap={2} width="100%" minWidth={0} maxWidth="100%">
-        <div className={styles.httpSettings} data-testid="config-http-settings">
-          <DataSourceHttpSettings
-            defaultUrl="http://localhost:5080"
+        <div className={`${styles.section} ${styles.httpSettings}`} data-testid="config-http-settings">
+          <ConnectionSettings
+            urlPlaceholder="http://localhost:5080"
             urlLabel="URL"
-            dataSourceConfig={options}
+            config={options}
             onChange={onOptionsChange}
-            showAccessOptions={false}
           />
+          <Auth
+            {...convertLegacyAuthProps({ config: options, onChange: onOptionsChange })}
+            visibleMethods={[
+              AuthMethod.BasicAuth,
+              AuthMethod.OAuthForward,
+              AuthMethod.NoAuth,
+              AuthMethod.CrossSiteCredentials,
+            ]}
+          />
+          <AdvancedHttpSettings config={options} onChange={onOptionsChange} />
         </div>
 
         <div className={styles.section} data-testid="config-openobserve-section">
@@ -163,10 +173,9 @@ export function ConfigEditor(props: Props) {
           <FieldSet label="Trace to logs">
             <div className={styles.grid}>
               <Field className={styles.field} label="Logs datasource" htmlFor="config-logs-datasource">
-                <Select
-                  className={styles.control}
+                <Combobox
                   aria-label="Logs datasource"
-                  inputId="config-logs-datasource"
+                  id="config-logs-datasource"
                   isClearable
                   options={logDatasourceOptions}
                   placeholder="Select a logs datasource"
@@ -175,32 +184,21 @@ export function ConfigEditor(props: Props) {
                 />
               </Field>
 
-              <Field className={styles.field} label="Tags" htmlFor="config-logs-tags">
-                <TagsInput
-                  className={styles.control}
-                  id="config-logs-tags"
-                  tags={(t2l.tags ?? []).map((tag) => tag.key)}
-                  onChange={(tags) => updateTracesToLogs({ tags: tags.map((key) => ({ key })) })}
-                />
-              </Field>
-
               <Field className={styles.field} label="Span start time shift" htmlFor="config-span-start-shift">
-                <Select
-                  className={styles.control}
-                  inputId="config-span-start-shift"
+                <Combobox
+                  id="config-span-start-shift"
                   options={SHIFT_OPTIONS}
-                  allowCustomValue
+                  createCustomValue
                   value={t2l.spanStartTimeShift ?? '0'}
                   onChange={(v) => updateTracesToLogs({ spanStartTimeShift: v.value })}
                 />
               </Field>
 
               <Field className={styles.field} label="Span end time shift" htmlFor="config-span-end-shift">
-                <Select
-                  className={styles.control}
-                  inputId="config-span-end-shift"
+                <Combobox
+                  id="config-span-end-shift"
                   options={SHIFT_OPTIONS}
-                  allowCustomValue
+                  createCustomValue
                   value={t2l.spanEndTimeShift ?? '0'}
                   onChange={(v) => updateTracesToLogs({ spanEndTimeShift: v.value })}
                 />
@@ -224,6 +222,56 @@ export function ConfigEditor(props: Props) {
                 />
               </Field>
             </div>
+            {(t2l.tags ?? []).map((tag, index) => (
+              <div className={styles.grid} key={index}>
+                <Field label={`Trace attribute ${index + 1}`} htmlFor={`config-tag-${index}-key`}>
+                  <Input
+                    id={`config-tag-${index}-key`}
+                    value={tag.key}
+                    placeholder="service.name"
+                    onChange={(event) =>
+                      updateTracesToLogs({
+                        tags: t2l.tags?.map((item, i) =>
+                          i === index ? { ...item, key: event.currentTarget.value } : item
+                        ),
+                      })
+                    }
+                  />
+                </Field>
+                <Field
+                  label={`Log label ${index + 1}`}
+                  htmlFor={`config-tag-${index}-value`}
+                  description="Leave empty to use the trace attribute name."
+                >
+                  <Input
+                    id={`config-tag-${index}-value`}
+                    aria-label={`Log label ${index + 1}`}
+                    value={tag.value ?? ''}
+                    placeholder="service_name"
+                    onChange={(event) =>
+                      updateTracesToLogs({
+                        tags: t2l.tags?.map((item, i) =>
+                          i === index ? { ...item, value: event.currentTarget.value } : item
+                        ),
+                      })
+                    }
+                  />
+                </Field>
+                <IconButton
+                  name="trash-alt"
+                  aria-label={`Remove tag mapping ${index + 1}`}
+                  onClick={() => updateTracesToLogs({ tags: t2l.tags?.filter((_, i) => i !== index) })}
+                />
+              </div>
+            ))}
+            <Button
+              variant="secondary"
+              size="sm"
+              icon="plus"
+              onClick={() => updateTracesToLogs({ tags: [...(t2l.tags ?? []), { key: '', value: '' }] })}
+            >
+              Add tag mapping
+            </Button>
           </FieldSet>
         </div>
       </Stack>

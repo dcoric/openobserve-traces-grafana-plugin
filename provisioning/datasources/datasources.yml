@@ -11,7 +11,7 @@ datasources:
     url: http://openobserve:5080
     isDefault: false
     orgId: 1
-    version: 1
+    version: 2
     editable: true
     basicAuth: true
     basicAuthUser: root@example.com
@@ -19,5 +19,14 @@ datasources:
       orgId: default
       defaultStream: default
       nodeGraph: true
+      tracesToLogsV2:
+        datasourceUid: openobserve-logs-local
+        tags:
+          - key: service.name
+            value: service_name
+        filterByTraceID: true
+        filterBySpanID: true
+        spanStartTimeShift: '-1m'
+        spanEndTimeShift: '1m'
     secureJsonData:
       basicAuthPassword: Complexpass#123
