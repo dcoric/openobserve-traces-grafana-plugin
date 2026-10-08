@@ -135,6 +135,13 @@ development builds require explicitly allowing
 `gresearch-openobservetraces-datasource` in Grafana's unsigned-plugin settings.
 Restart Grafana after installation.
 
+CI push builds and Nightly builds use private signing when
+`GRAFANA_ACCESS_POLICY_TOKEN` is configured. Their signatures default to
+`http://localhost:3000`, where CI runs Grafana. Set the `SIGN_ROOT_URL` repository
+variable to a comma-separated list of Grafana root URLs for other installations;
+include `http://localhost:3000` so CI can load the signed plugin too. These
+signatures do not make the plugin publicly distributable through the catalog.
+
 The [Release workflow](.github/workflows/release.yml) requires a
 `GRAFANA_ACCESS_POLICY_TOKEN`, creates a draft release for `v*` tags, and runs
 the official validator. Publishing remains subject to namespace ownership,
