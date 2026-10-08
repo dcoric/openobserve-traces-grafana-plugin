@@ -13,6 +13,9 @@ services:
     extends:
       file: .config/docker-compose-base.yaml
       service: grafana
+    build:
+      args:
+        grafana_version: ${GRAFANA_VERSION:-13.2.3}
     ports: !override
       - target: 3000
         published: '3000'
@@ -56,16 +59,21 @@ services:
       retries: 5
       start_period: 20s
 
-  # One-shot bucket bootstrap: RustFS has no create-bucket-on-start env var,
-  # and o2 does NOT create its bucket itself. `mc mb -p` is idempotent.
   rustfs-init:
-    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    image: public.ecr.aws/aws-cli/aws-cli:2.31.0
     depends_on:
       rustfs:
         condition: service_healthy
     entrypoint: ['/bin/sh', '-c']
+    environment:
+      AWS_ACCESS_KEY_ID: openobserve-access
+      AWS_SECRET_ACCESS_KEY: openobserve-secret
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_EC2_METADATA_DISABLED: 'true'
     command:
-      - mc alias set rustfs http://rustfs:9000 openobserve-access openobserve-secret && mc mb -p rustfs/openobserve
+      - >-
+        aws --endpoint-url http://rustfs:9000 s3api head-bucket --bucket openobserve ||
+        aws --endpoint-url http://rustfs:9000 s3api create-bucket --bucket openobserve
     restart: 'no'
 
   openobserve:
@@ -117,6 +125,8 @@ services:
     depends_on:
       openobserve:
         condition: service_healthy
+      loki:
+        condition: service_started
     volumes:
       - ./dev/otel-collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro
     ports:
@@ -134,7 +144,7 @@ services:
   # One-shot simulated-data seeder. Re-run any time with:
   #   docker compose run --rm seed          (or `npm run seed` from the host)
   seed:
-    image: node:22-alpine
+    image: node:24-alpine
     depends_on:
       openobserve:
         condition: service_healthy
@@ -142,6 +152,8 @@ services:
         condition: service_started
     environment:
       OTLP_HTTP_ENDPOINT: http://otel-collector:4318
+      OPENOBSERVE_URL: http://openobserve:5080
+      LOKI_URL: http://loki:3100
       TRACE_COUNT: ${SEED_TRACE_COUNT:-200}
       TIME_SPREAD_MINUTES: ${SEED_TIME_SPREAD_MINUTES:-60}
       ERROR_RATE: ${SEED_ERROR_RATE:-0.08}
@@ -152,6 +164,19 @@ services:
     command: ['node', '/seed/generate-traces.mjs']
     restart: 'no'
 
+  loki:
+    image: grafana/loki:3.7.0
+    command: ['-config.file=/etc/loki/local.yaml']
+    ports:
+      - target: 3100
+        published: '3100'
+        host_ip: *dev-bind-address
+        protocol: tcp
+    volumes:
+      - ./dev/loki/config.yaml:/etc/loki/local.yaml:ro
+      - loki-data:/loki
+
 volumes:
   rustfs-data:
   openobserve-data:
+  loki-data:

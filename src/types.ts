@@ -52,6 +52,11 @@ export interface TraceToLogsOptions {
 
 /** Datasource configuration (jsonData). */
 export interface O2DataSourceOptions extends DataSourceJsonData {
+  tlsAuth?: boolean;
+  tlsAuthWithCACert?: boolean;
+  tlsSkipVerify?: boolean;
+  serverName?: string;
+  [header: `httpHeaderName${number}`]: string | undefined;
   orgId?: string;
   defaultStream?: string;
   nodeGraph?: boolean;

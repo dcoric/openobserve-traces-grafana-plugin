@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { CoreApp, type QueryEditorProps } from '@grafana/data';
 import { DataSource } from '../datasource';
 import { QueryEditor } from './QueryEditor';
@@ -80,14 +80,55 @@ describe('QueryEditor stream discovery', () => {
         expect(target).toBeDefined();
       }
       expect(within(container).getByRole('textbox', { name: 'Service' })).toBeInTheDocument();
-      expect(within(container).getByRole('textbox', { name: 'Tag 1 attribute' })).toBeInTheDocument();
+      expect(within(container).getByRole('combobox', { name: 'Tag 1 attribute' })).toBeInTheDocument();
       expect(within(container).getByRole('textbox', { name: 'Tag 1 value' })).toBeInTheDocument();
     }
+  });
+
+  it('retains custom attributes when schema discovery fails', async () => {
+    const datasource = createDatasourceMock(jest.fn().mockResolvedValue([]));
+    datasource.getSchema = jest.fn().mockRejectedValue(new Error('Unavailable'));
+    const onChange = jest.fn();
+    render(
+      <QueryEditor
+        datasource={datasource}
+        app={CoreApp.Explore}
+        query={{ refId: 'A', stream: 'custom', tags: [{ key: 'saved.attribute', value: 'GET' }] }}
+        onChange={onChange}
+        onRunQuery={jest.fn()}
+      />
+    );
+    expect(await screen.findByText('You can still enter attribute names manually.')).toBeVisible();
+    expect(datasource.getSchema).toHaveBeenCalledWith('custom');
+    expect(screen.getByRole('combobox', { name: 'Tag 1 attribute' })).toHaveValue('saved.attribute');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Tag 1 value' }), { target: { value: 'POST' } });
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tags: [{ key: 'saved.attribute', value: 'POST' }] })
+    );
+  });
+
+  it('blocks automatic execution of invalid durations and retains decimal limits for validation', async () => {
+    const datasource = createDatasourceMock(jest.fn().mockResolvedValue([]));
+    const onRunQuery = jest.fn();
+    const onChange = jest.fn();
+    const props = { datasource, app: CoreApp.Explore, onRunQuery, onChange };
+    const view = render(<QueryEditor {...props} query={{ refId: 'A', minDuration: 'bad', limit: 501 }} />);
+    await waitFor(() => expect(datasource.getSchema).toHaveBeenCalled());
+    expect(screen.getByText(/Use a non-negative duration/)).toBeVisible();
+    expect(screen.getByText(/Use a whole number up to 500/)).toBeVisible();
+    fireEvent.blur(screen.getByRole('textbox', { name: 'Min duration' }));
+    expect(onRunQuery).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Limit' }), { target: { value: '1.5' } });
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 1.5 }));
+    view.rerender(<QueryEditor {...props} query={{ refId: 'A', minDuration: '${duration}', limit: 500 }} />);
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Min duration' }), { key: 'Enter' });
+    expect(onRunQuery).toHaveBeenCalledTimes(1);
   });
 });
 
 function createDatasourceMock(getStreams: jest.MockedFunction<DataSource['getStreams']>): DataSource {
   const datasource = Object.create(DataSource.prototype) as DataSource;
   datasource.getStreams = getStreams;
+  datasource.getSchema = jest.fn().mockResolvedValue(['http_method']);
   return datasource;
 }

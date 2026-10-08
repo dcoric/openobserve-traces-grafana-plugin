@@ -15,7 +15,7 @@ export const getQueryEditorStyles = (theme: GrafanaTheme2) => {
     },
   });
   return {
-    root: css({ width: '100%', minWidth: 0, maxWidth: '100%', overflowX: 'hidden' }),
+    root: css({ width: '100%', minWidth: 0, maxWidth: '100%' }),
     grid: css({
       display: 'grid',
       width: '100%',
