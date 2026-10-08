@@ -29,12 +29,6 @@ updates:
       grafana:
         patterns:
           - '@grafana/*'
-        dependency-type: 'production'
-        update-types:
-          - 'minor'
-          - 'patch'
-      react:
-        patterns:
           - 'react'
           - 'react-dom'
           - '@types/react'

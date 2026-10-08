@@ -1,169 +1,104 @@
-# Manual run & test walkthrough
+# Manual runtime walkthrough
 
-Step-by-step instructions to run the local stack and exercise the plugin by
-hand. Reference details (URLs, credentials, image pins, troubleshooting) live
-in [`DEV-ENVIRONMENT.md`](DEV-ENVIRONMENT.md); the validation checklist this
-walkthrough feeds is [`VALIDATION.md`](VALIDATION.md).
+Use the versions, commands and local credentials in
+[DEV-ENVIRONMENT.md](DEV-ENVIRONMENT.md). Record the revision, Grafana and
+OpenObserve versions, seed output and reference time for each acceptance run.
+The dated results are in [VALIDATION.md](VALIDATION.md).
 
-Completing the walkthrough provides repeatable evidence for connection,
-search, trace rendering, truncation warnings, and S3-backed persistence.
-
-## 1. Build the plugin (once, and after code changes)
+## Build, start and seed
 
 ```bash
-npm install
-npm run build              # frontend → dist/
-mage -v build:linuxARM64   # backend for the container on Apple Silicon
-                           # use `mage -v build:linux` on x86_64 hosts
+npm ci
+npm run build
+mage buildAll
+docker compose up --build -d
+docker wait "$(docker compose ps -aq seed)"
+docker compose logs seed
 ```
 
-The Grafana container mounts `dist/`, so the backend binary must match the
-container's architecture (`gpx_openobserve_traces_linux_arm64` on Apple
-Silicon, `..._linux_amd64` on x86_64).
+The seed's exit code must be 0. Wait for the `Indexed ...` readiness message,
+and retain the printed large trace ID. Ordinary reruns generate new trace IDs
+from the current reference timestamp, even with the same random seed.
 
-## 2. Start the stack
+## Connection and search
+
+Open [Grafana](http://localhost:3000), then **Connections > Data sources >
+OpenObserve Traces**. Confirm URL `http://openobserve:5080`, Basic Auth with
+the local credentials, organization `default`, and default stream `default`.
+**Save & test** should say **Connected to OpenObserve**. For an authentication
+failure check, create a separate temporary datasource with incorrect
+credentials, then remove it after checking the error.
+
+In **Explore**, select **OpenObserve Traces** and **Last 1 hour**:
+
+1. Run a search and inspect the trace ID, time, name, service, duration and
+   span/error counts.
+2. Filter service `payment-service`, span name `PaymentService/Charge`, and
+   **Errors only**. Returned trace summaries should still include the complete
+   trace, with the matching payment span visible in drill-down.
+3. Try `200ms` as the minimum duration. Enter an invalid duration to verify
+   inline feedback, then restore a valid value.
+4. Add an attribute filter and confirm suggestions from the selected stream.
+   For product requests, `http_method=GET` is a useful example.
+5. Set the result limit to 1. Hover the query's warning to confirm that more
+   traces may match. Requests above 500 are rejected.
+
+## Waterfall, details and graph
+
+Click a result's trace ID. Check the native waterfall has nested spans and
+sensible durations. Open a failed `PaymentService/Charge` span and inspect its
+error status, attributes and exception event. Expand **Resource attributes**
+and confirm `service.name`. An `order-processor` trace contains a link back to
+the checkout producer; inspect its reference context.
+
+Expand **Node graph** above the waterfall. Nodes correspond to spans and edges
+to parent-child relationships. The datasource can enable graph output by
+default; the query also offers a node graph switch.
+
+Compare a representative trace's start time, duration, relationships and
+events with the same trace in [OpenObserve](http://localhost:5080). Absolute
+timestamps are normalized to milliseconds; OpenObserve's relative duration
+field is interpreted as microseconds.
+
+## Trace to logs
+
+The provisioned datasource selects **Local Trace Logs**, maps `service.name`
+to `service_name`, enables trace and span ID filters, and uses time shifts of
+`-1m` and `1m`. Open a span and click **Logs for this span** (the logs icon on
+older Grafana versions). The split logs pane should show a `Completed ...`
+record with that trace ID and span ID. Failed spans produce error records.
+
+This exercises Loki's native integration. Validate different production logs
+plugins and label mappings separately.
+
+## Large traces and range boundaries
+
+Search attribute `dev_scenario=large-trace`. The result should contain 5,001
+spans with the default seed. Open it and verify the waterfall shows 5,000
+spans. Hover the trace query's warning and confirm:
+
+> Trace contains more than 5000 spans; showing the first 5000 spans.
+
+The search query may have its own full-page warning, so inspect the warning
+beside the trace-ID query. Detection uses one extra fetched row and does not
+depend on an accurate OpenObserve `total`.
+
+For a short normal trace, set a one-second absolute range four minutes before
+its start and run the trace-ID query. Repeat four minutes after its start. Both
+should render because lookup pads the range by five minutes. A range six
+minutes after the trace should contain no spans. An invalid ID such as
+`not-a-trace` should show the backend validation error.
+
+## Automated checks and cleanup
 
 ```bash
-npm run server             # = docker compose up --build
+npm run e2e
+docker compose run --rm --entrypoint aws rustfs-init \
+  --endpoint-url http://rustfs:9000 s3api list-objects-v2 \
+  --bucket openobserve --max-items 10
 ```
 
-Bring-up is ordered: `rustfs` → bucket init → `openobserve` → collector +
-grafana → **seed runs automatically** and exits after pushing ~200 simulated
-traces spread over the last hour plus one 5,001-span trace. The compose seed
-is structurally deterministic (pinned `SEED_RANDOM_SEED=1`: same IDs, spans,
-scenarios); timestamps default to the current time, so set `REFERENCE_TIME_MS`
-and record the invocation when fully reproducible timestamps are needed (see
-[`VALIDATION.md`](VALIDATION.md) §8). Watch for the seed's completion lines:
-
-```
-seed-1  | Done: 237 traces, 6261 spans (incl. 36 async order-processing traces with links).
-seed-1  | Large trace: traceId=<32-hex> spans=5001 scenario=large-trace
-```
-
-Keep the `Large trace: traceId=...` value — you will paste it into the
-truncation check below.
-
-## 3. Test in Grafana (the main event)
-
-Open **http://localhost:3000** (anonymous admin, no login) → **Explore** →
-datasource **OpenObserve Traces**.
-
-### Datasource configuration
-
-The provisioned datasource skips this flow, so exercise it once by hand:
-**Connections → Data sources → Add new data source → OpenObserve Traces**
-(or open the provisioned one). Set URL `http://openobserve:5080`, enable
-Basic auth (`root@example.com` / `Complexpass#123` — the password lands in a
-secure field), Organization `default`, Default traces stream `default`, and
-click **Save & test** → "Connected to OpenObserve". Break the password and
-save again → a clear error, not a silent failure.
-
-### Search tab
-
-- Run with defaults → a table of traces appears.
-- Filter **Service** = `payment-service` and enable **Errors only** → only
-  failed `PaymentService/Charge` traces should return.
-- Set **Span name** = `PaymentService/Charge` → only traces containing that
-  operation return.
-- Try **Min duration** `200ms` → only slower traces remain.
-- Injection probe: set **Service** to `payment-service' OR '1'='1` → it must be
-  treated as a literal string — zero results and no query error, never a
-  widened result set.
-
-### Waterfall (trace drill-down)
-
-- Click any **trace ID** in the results → the native trace view opens.
-- Check: spans nest under a single root, bar widths/offsets look sane, and
-  error spans are marked red.
-- Expand a failed `PaymentService/Charge` span → **Logs/Events** contain the
-  `exception` event with type, message and stacktrace.
-- Open an `orders process` span (service `order-processor`) → **References**
-  link back to the originating checkout trace.
-
-### Trace ID tab & node graph
-
-- Paste a trace ID directly into the **Trace ID** tab.
-- Toggle **Node graph** on → a span-level node graph renders above the
-  waterfall (one node per span, edges = parent-child relationships). It shows
-  span relationships within this trace — it is **not** a Tempo-style service
-  graph.
-
-### Truncation warning (large trace)
-
-- Paste the seed's `Large trace: traceId=...` value into the **Trace ID** tab.
-- The waterfall renders at most 5,000 of the 5,001 spans **and** Grafana shows
-  a visible warning that OpenObserve returned fewer spans than the trace
-  total. A silently complete-looking result here is a bug.
-- Caveat: every seed re-run with the same `SEED_RANDOM_SEED` re-ingests the
-  **same** large-trace ID (a second `docker compose up` doubles it to
-  10,002 spans at new timestamps), so the warning's span total grows. For the
-  clean "5,000 of 5,001" case, start from `docker compose down -v`.
-- Back on the **Search** tab, set **Limit** to a value the result set fills
-  (e.g. `10`) → the results table carries a "search returned the maximum of
-  10 traces; more may match" warning.
-
-### Cross-check against OpenObserve's own UI
-
-Open **http://localhost:5080** (`root@example.com` / `Complexpass#123`) →
-Traces, and open the same trace. Total duration, span offsets and bar widths
-should match what Grafana shows — this is the §1 timing check from
-[`VALIDATION.md`](VALIDATION.md).
-
-## 4. Seed more / different data
-
-```bash
-npm run seed                                            # +200 traces from the host
-                                                        # (random seed unless
-                                                        #  SEED_RANDOM_SEED is set)
-docker compose run --rm -e TRACE_COUNT=1000 -e TIME_SPREAD_MINUTES=360 seed
-docker compose run --rm -e SEED_RANDOM_SEED=42 seed     # deterministic IDs/structure
-```
-
-All generator knobs (`TRACE_COUNT`, `TIME_SPREAD_MINUTES`, `ERROR_RATE`,
-`SEED_RANDOM_SEED`, `LARGE_TRACE_SPAN_COUNT`, `REFERENCE_TIME_MS`) are
-documented in [`DEV-ENVIRONMENT.md`](DEV-ENVIRONMENT.md#seeding-data).
-
-## 5. Poke the layers directly (optional)
-
-Raw OpenObserve search API — the exact payload shape the plugin's backend
-consumes:
-
-```bash
-curl -s -u 'root@example.com:Complexpass#123' \
-  'http://localhost:5080/api/default/_search?type=traces' \
-  -H 'Content-Type: application/json' \
-  -d '{"query":{"sql":"SELECT count(*) FROM \"default\"","start_time":'$(( ($(date +%s)-7200)*1000000 ))',"end_time":'$(( $(date +%s)*1000000 ))',"from":0,"size":10}}'
-```
-
-S3 leg — list the Parquet objects OpenObserve wrote (allow ~1 min after
-seeding for the WAL→Parquet flush). This confirms that OpenObserve stores local
-data through RustFS:
-
-```bash
-docker compose run --rm --entrypoint /bin/sh rustfs-init -c \
-  'mc alias set rustfs http://rustfs:9000 openobserve-access openobserve-secret >/dev/null \
-   && mc ls --recursive rustfs/openobserve'
-```
-
-Or browse the bucket in the RustFS console at **http://localhost:9001**
-(`openobserve-access` / `openobserve-secret`).
-
-Datasource health through the plugin backend:
-
-```bash
-curl -s http://localhost:3000/api/datasources/uid/openobserve-traces-local/health
-# → {"message":"Connected to OpenObserve","status":"OK"}
-```
-
-## 6. Reset
-
-```bash
-docker compose down        # stop, keep data
-docker compose down -v     # stop + wipe all volumes (fresh start)
-```
-
-If something misbehaves, see the troubleshooting section in
-[`DEV-ENVIRONMENT.md`](DEV-ENVIRONMENT.md#troubleshooting) — e.g. "seed said
-Done but Grafana shows nothing" is usually the Explore time range not covering
-the seeded window, or collector-side delivery errors visible via
-`docker compose logs otel-collector`.
+Allow about a minute for OpenObserve's WAL flush before expecting S3 objects.
+`docker compose down` stops the stack and preserves data. Use `down -v` only
+when intentionally deleting all local volumes. Restart Grafana after backend
+or plugin metadata changes before repeating acceptance checks.

@@ -1,196 +1,143 @@
-# OpenObserve Traces — Grafana data source
+# OpenObserve Traces for Grafana
 
-A Grafana data source plugin that visualizes distributed traces stored in
-[OpenObserve](https://openobserve.ai) (o2) using Grafana's **native trace
-view** — the same waterfall/timeline UI the stock Tempo data source uses.
+A Grafana backend datasource that renders traces stored in
+[OpenObserve](https://openobserve.ai) using Grafana's native waterfall, span
+details and node graph. Search by service, operation, duration, error status or
+attributes, then click a trace ID to investigate it and open correlated logs.
 
-The existing OpenObserve Grafana plugin shows logs and metrics but not traces.
-This plugin fills that gap: it queries OpenObserve's trace data over the o2 HTTP
-API (SQL search) and transforms the results into the DataFrame format Grafana's
-trace view consumes.
+![Structured trace search](src/img/trace-search.png)
 
-> **Validation status:** maintained in one place —
-> [`docs/VALIDATION.md`](docs/VALIDATION.md). Settled evidence: the local o2
-> v0.91.2 run (2026-07-17) confirmed the field mappings and `duration` = µs.
-> Everything still open (packaging, runtime E2E, live checks, GR rollout) is
-> listed in that file — trust it over any status prose found elsewhere.
+## Try the local stack
 
-## Features
-
-- **Search** traces by service, span/operation name, duration, error status and
-  attribute filters → results table → click a trace to open its waterfall.
-- **Trace ID** lookup → full span waterfall with span details, tags, resource
-  attributes, events (logs) and links (references).
-- **Node graph** (optional) — a span-level graph of the spans in the opened
-  trace, alongside the waterfall. It shows span relationships, not a
-  Tempo-style service graph.
-- **Trace → logs** link configuration (`tracesToLogsV2`, rendered by Grafana
-  core) — pending GR confirmation of target log streams/labels and not yet
-  validated end-to-end.
-- Reuses Grafana's HTTP data source settings for **URL, Basic Auth and TLS** —
-  credentials stay on the backend, never in the browser.
-- Structured search has no raw SQL/`rawWhere` escape hatch. Search requests are
-  capped at 500 traces and warn when a page fills the requested limit; trace
-  lookup is capped at 5,000 spans and warns when OpenObserve reports more total
-  spans than were returned.
-
-## Architecture
-
-```
-QueryEditor (React) ──► DataSourceWithBackend.query()
-                              │  O2Query {queryType, traceId|filters, stream}
-                              ▼
-                     Go backend (pkg/plugin)
-                              │  POST /api/{org}/_search?type=traces
-                              ▼
-                        OpenObserve
-                              │  hits[] (one row per span / per trace)
-                              ▼
-            transform.go ── ns/µs → ms, parse events/links JSON,
-                            classify tags vs resource attrs
-                              ▼
-        trace frame (preferredVisualisationType = "trace")  ──► Grafana TraceView
-        table frame (with drill-down data link)             ──► Explore table
-        node-graph frames (nodeGraph)                        ──► node graph tab
-```
-
-| Layer    | Location       | Responsibility                                                         |
-| -------- | -------------- | ---------------------------------------------------------------------- |
-| Frontend | [`src/`](src/) | Query editor (search builder + trace-id), config editor, query model   |
-| Backend  | [`pkg/`](pkg/) | Auth, OpenObserve API calls, SQL generation, the trace-frame transform |
-
-The transform lives in Go ([`pkg/plugin/transform.go`](pkg/plugin/transform.go))
-so the unit conversions are unit-tested and credentials never reach the browser.
-
-## OpenObserve API contract
-
-| Purpose        | Call                                                                                                         |
-| -------------- | ------------------------------------------------------------------------------------------------------------ |
-| Search (table) | `POST /api/{org}/_search?type=traces` with a conditional-aggregate `GROUP BY trace_id` query                 |
-| Trace by id    | `POST /api/{org}/_search?type=traces` — `SELECT * FROM "{stream}" WHERE trace_id='{id}' ORDER BY start_time` |
-| Stream list    | `GET /api/{org}/streams?type=traces`                                                                         |
-| Schema         | `GET /api/{org}/streams/{stream}/schema?type=traces`                                                         |
-| Health         | `GET /api/{org}/streams?type=traces`                                                                         |
-
-`start_time`/`end_time` request params are **microseconds** since epoch.
-
-## Field mapping & time units
-
-OpenObserve stores span timestamps in **three different units**. The transform
-handles each explicitly; absolute timestamps additionally use magnitude
-detection so they survive a unit change between OpenObserve versions.
-
-| Grafana field (ms)    | OpenObserve column                                   | Conversion                                                       |
-| --------------------- | ---------------------------------------------------- | ---------------------------------------------------------------- |
-| `startTime`           | `start_time` (nanoseconds)                           | magnitude-detected → ms                                          |
-| `duration`            | `duration` (microseconds)                            | ÷ 1000                                                           |
-| `logs[].timestamp`    | event `_timestamp` (nanoseconds)                     | magnitude-detected → ms                                          |
-| `parentSpanID`        | `reference_parent_span_id`                           | as-is (empty ⇒ root)                                             |
-| `kind`                | `span_kind`                                          | `0..5` or `SPAN_KIND_*` → name                                   |
-| `statusCode`          | `status_code` / `span_status`                        | int, or derived from string                                      |
-| `tags`                | flattened span attributes (+ synthetic `error`)      | parsed values                                                    |
-| `serviceTags`         | resource-attribute columns (`service_*`, `k8s_*`, …) | current heuristic split; schema-driven classification is pending |
-| `logs` / `references` | `events` / `links`                                   | JSON-string → parsed array                                       |
-
-See [`docs/VALIDATION.md`](docs/VALIDATION.md) for which of these need
-confirming against a live instance.
-
-## Build & run
-
-Requires Node 22, Go 1.26.3 (from `go.mod`), and [Mage](https://magefile.org).
+Requires Node 24, Go 1.26.5 or newer, [Mage](https://magefile.org), and Docker
+Compose. The supported Grafana range starts at 12.0.0; the default local image
+is 13.2.3.
 
 ```bash
-npm install
-npm run build              # frontend → dist/
-mage -v build:linuxARM64   # backend for the container (Apple Silicon)
-                           # use build:linux on x86_64 hosts / CI
-npm run server             # docker compose: the FULL local stack
-npm run seed               # (re)generate simulated traces any time
-npm run test:ci             # Jest unit/component tests
-npm run e2e                 # authored Grafana E2E specs (fresh backend required)
+npm ci
+npm run build
+mage buildAll
+docker compose up --build -d
+docker wait "$(docker compose ps -aq seed)"
+docker compose logs seed
 ```
 
-`dist/` is git-ignored; a clean checkout must rebuild the frontend and the
-architecture-specific backend before starting Grafana. The current integration
-environment has stale backend binaries and no host Mage, so runtime E2E is not
-yet an acceptance result.
+Wait for a successful seed exit and the `Indexed ... complete traces and
+verified correlated Loki logs` message. Open [Grafana](http://localhost:3000),
+choose **Explore**, and select **OpenObserve Traces**. The stack includes
+OpenObserve, RustFS, an OTel collector, Loki, and seeded traces and logs.
+Published ports bind to loopback; the known development credentials and
+anonymous Grafana admin access are for local use.
 
-`npm run server` brings up the complete local emulation of the production
-stack — RustFS (S3) ← OpenObserve ← OTel Collector ← trace simulator — plus
-Grafana with the plugin and a provisioned datasource. Compose binds published
-ports to `127.0.0.1` by default and seeds ~200 normal traces plus a deterministic
-5,001-span trace. Set `DEV_BIND_ADDRESS=0.0.0.0` only for deliberate remote
-exposure on a trusted network; the dev stack uses known credentials and
-anonymous Grafana. See
-[`docs/DEV-ENVIRONMENT.md`](docs/DEV-ENVIRONMENT.md) for URLs, credentials,
-seeding knobs and troubleshooting.
+See [environment reference](docs/DEV-ENVIRONMENT.md) for credentials, versions,
+seed controls and troubleshooting, or follow the
+[manual walkthrough](docs/MANUAL-TESTING.md).
 
-Open http://localhost:3000 → Explore → **OpenObserve Traces**.
+## Query and inspect
 
-**➡️ [`docs/MANUAL-TESTING.md`](docs/MANUAL-TESTING.md)** is the step-by-step
-walkthrough for running and testing everything by hand — what to click in
-Explore, what a correct result looks like, and how to poke each layer
-(o2 API, S3 bucket, plugin health) directly.
+- **Search** matches service, span name, error status and attribute filters on
+  the same span, while summarizing all spans in each matching trace. Schema
+  discovery supplies attribute suggestions; custom attribute names remain
+  available if discovery fails.
+- **Duration** accepts values such as `100us`, `1.5ms` and `2s`, bare
+  microseconds, or template variables. Invalid values show inline feedback.
+- **Trace ID** opens the native waterfall with span/resource attributes,
+  events, links, kinds and error status.
+- **Node graph** shows parent-child relationships between spans in the opened
+  trace. It is a span graph, not an aggregate service graph.
+- **Trace to logs** uses Grafana's native integration. The local Loki example
+  maps `service.name` to `service_name` and filters both trace and span IDs.
 
-### Test / lint
+![Native trace waterfall](src/img/trace-waterfall.png)
+
+Search defaults to 50 traces and permits at most 500. A full page warns that
+more results may match. Trace lookup renders at most 5,000 spans, probes one
+extra row to detect truncation, and displays a warning when that limit is
+exceeded. It widens the selected time range by five minutes on each side.
+Pagination, unlimited retrieval and raw SQL input are not provided.
+
+## Configure a datasource
+
+1. Set the OpenObserve base URL, reachable from the Grafana server. In Compose
+   this is `http://openobserve:5080`.
+2. Select the HTTP authentication required by your deployment. Basic Auth
+   passwords, TLS material and custom header values use Grafana secure fields.
+3. Set the organization and default traces stream, both `default` locally.
+4. Optionally enable the node graph and select a logs datasource. Configure its
+   resource-tag mappings, time shifts and trace/span ID filters.
+5. Click **Save & test** and confirm **Connected to OpenObserve**.
+
+Production authentication and logs integration depend on the target deployment.
+Verify its versions, stream names, TLS and label mappings before rollout.
+
+## Build and test
 
 ```bash
-go test ./pkg/...        # transform + SQL unit tests
 npm run typecheck
 npm run lint
 npm run test:ci
+node --test dev/seed/*.test.mjs
+go test -race ./pkg/...
+npm run e2e
 ```
 
-## Installation
+The browser suite requires the running, successfully seeded stack. It checks
+configuration, search, actual native drill-down, error details, node graph,
+matching logs, large-trace truncation, range padding and invalid IDs. CI runs
+the suite across supported Grafana versions and nightly.
 
-- **Nightly** — built on every push to `main` by the
-  [Nightly](.github/workflows/nightly.yml) workflow. Download the
-  `gresearch-openobservetraces-datasource-nightly` artifact from the latest
-  run, then:
+Use `npm run dev` for frontend watch mode. For a single backend target, run
+`mage build:linuxARM64` on Apple Silicon or `mage build:linux` on x86_64.
+Restart Grafana after rebuilding its backend binary or changing plugin metadata.
+`dist/` is generated and ignored by Git.
 
-  ```bash
-  grafana plugin install ./gresearch-openobservetraces-datasource-<version>-<sha>.zip
-  ```
+## Architecture and API contract
 
-  or unzip it into Grafana's `data/plugins/` directory.
+The React editor sends a structured query through `DataSourceWithBackend` to
+the Go backend. Grafana's backend HTTP client applies authentication and TLS.
+The backend queries OpenObserve, converts its rows into Grafana data frames,
+and supplies internal search-result links to the native trace view.
 
-- **Release** — push a `v*` tag to run the
-  [Release](.github/workflows/release.yml) workflow, which produces a signed
-  zip and a *draft* GitHub release. Publish the draft, then install the zip
-  the same way as above.
+| Purpose                     | OpenObserve endpoint                                 |
+| --------------------------- | ---------------------------------------------------- |
+| Search and trace lookup     | `POST /api/{org}/_search?type=traces`                |
+| Stream discovery and health | `GET /api/{org}/streams?type=traces`                 |
+| Attribute suggestions       | `GET /api/{org}/streams/{stream}/schema?type=traces` |
 
-## Configuration
+Search uses conditional `HAVING` aggregation by trace ID. Trace lookup selects
+the trace's spans ordered by start time. Request time bounds are microseconds
+since epoch.
 
-1. **URL** — the OpenObserve base URL (self-hosted default `http://localhost:5080`).
-2. **Auth** — enable _Basic auth_; user = your o2 email (or a service-account /
-   API token's identity), password = the o2 password or token.
-3. **Organization** — the o2 org id (default `default`).
-4. **Default traces stream** — the stream queried when a query omits one
-   (usually `default`).
-5. _(optional)_ **Node graph**, **Trace to logs**.
+| Grafana field         | OpenObserve source and conversion                                       |
+| --------------------- | ----------------------------------------------------------------------- |
+| `startTime`           | Absolute `start_time`, magnitude-detected and converted to milliseconds |
+| `duration`            | Relative microseconds divided by 1,000                                  |
+| `parentSpanID`        | `reference_parent_span_id`; empty for a root                            |
+| `kind`, `statusCode`  | Numeric/string span kind and status                                     |
+| `tags`, `serviceTags` | Span/resource prefix heuristic, plus canonical resource `service.name`  |
+| `logs`, `references`  | Parsed events and links; event timestamps converted to milliseconds     |
 
-## Status & known limitations
+Implementation: [frontend](src/), [backend](pkg/plugin/), and
+[mapping regression fixture](pkg/plugin/testdata/live_trace_v0.91.2.json).
 
-Live validation status is tracked in [`docs/VALIDATION.md`](docs/VALIDATION.md);
-stable limitations:
+## Packaging and deployment status
 
-- The prior local v0.91.2 mapping run is not a fresh acceptance of the hardened
-  backend. Fresh Mage build, runtime E2E, live cap/window checks, and GR
-  version/auth rollout validation remain pending.
-- `serviceTags` vs `tags` is still a prefix heuristic; schema-driven tags are
-  planned.
-- Trace-to-logs configuration is present, but a logs source, emitted logs, and
-  end-to-end correlation have not been validated pending GR confirmation of
-  log streams/labels.
-- Trace-by-ID widens the dashboard time range by ±5 min. Trace detail is capped
-  at 5,000 spans with a visible truncation warning; pagination/unlimited size is
-  not implemented or claimed. Search pages are capped at 500 traces and warn
-  when a page fills the requested limit.
-- Seed IDs are deterministic when `SEED_RANDOM_SEED` is fixed, while timestamps
-  use current time by default. Re-running with the same seed reuses IDs at new
-  timestamps; use a different seed or reset volumes for a clean dataset.
-- `DataSourceHttpSettings` and `Select` raise deprecation warnings under
-  Grafana 13; migration to `@grafana/plugin-ui` / `Combobox` is pending.
-- Release tags require `GRAFANA_ACCESS_POLICY_TOKEN`; the release workflow
-  refuses to publish when it is absent. A signed artifact has not yet been
-  produced in this workspace.
+[Validation record](docs/VALIDATION.md) distinguishes current local acceptance,
+historical mapping evidence, and remaining production requirements. The refresh
+passed local runtime tests on Grafana 12.0.0, 13.0.10 and 13.2.3 with OpenObserve
+v0.91.2. Resource classification still uses prefixes. Grafana's Explore host
+can scroll horizontally on phone-sized screens.
+
+The [Nightly workflow](.github/workflows/nightly.yml) builds a ZIP on pushes to
+`main`. Download its `gresearch-openobservetraces-datasource-nightly` artifact
+and extract the inner plugin ZIP into Grafana's plugin directory. Unsigned
+development builds require explicitly allowing
+`gresearch-openobservetraces-datasource` in Grafana's unsigned-plugin settings.
+Restart Grafana after installation.
+
+The [Release workflow](.github/workflows/release.yml) requires a
+`GRAFANA_ACCESS_POLICY_TOKEN`, creates a draft release for `v*` tags, and runs
+the official validator. Publishing remains subject to namespace ownership,
+signing and full validation. The current full validator cannot resolve the
+`gresearch` Grafana Cloud organization; this refresh does not change the plugin
+ID or claim a signed production release.
