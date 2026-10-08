@@ -1,7 +1,7 @@
 import { getTemplateSrv } from '@grafana/runtime';
-import type { ScopedVars } from '@grafana/data';
+import type { DataSourceInstanceSettings, ScopedVars } from '@grafana/data';
 import { DataSource } from './datasource';
-import type { O2Query } from './types';
+import type { O2DataSourceOptions, O2Query } from './types';
 
 jest.mock('@grafana/runtime', () => ({
   DataSourceWithBackend: class DataSourceWithBackend {},
@@ -66,5 +66,30 @@ describe('DataSource query handling', () => {
     datasource.getResource = jest.fn().mockResolvedValue({ streams: [] });
 
     await expect(datasource.getStreams()).resolves.toEqual([]);
+  });
+
+  it('discovers distinct sorted attributes using the selected stream', async () => {
+    const datasource = new DataSource({} as never);
+    datasource.getResource = jest.fn().mockResolvedValue({ schema: [{ name: 'z' }, { name: 'a' }, { name: 'z' }] });
+    await expect(datasource.getSchema('custom stream')).resolves.toEqual(['a', 'z']);
+    expect(datasource.getResource).toHaveBeenCalledWith('schema', { stream: 'custom stream' });
+  });
+
+  it.each([{}, { schema: 'bad' }, { schema: [null] }, { schema: [{ name: 1 }] }])(
+    'rejects invalid schema responses: %j',
+    async (response) => {
+      const datasource = new DataSource({} as never);
+      datasource.getResource = jest.fn().mockResolvedValue(response);
+      await expect(datasource.getSchema()).rejects.toThrow('Invalid schema response');
+    }
+  );
+
+  it('uses the configured default stream for schema discovery', async () => {
+    const datasource = new DataSource({
+      jsonData: { defaultStream: 'configured' },
+    } as DataSourceInstanceSettings<O2DataSourceOptions>);
+    datasource.getResource = jest.fn().mockResolvedValue({ schema: [] });
+    await expect(datasource.getSchema()).resolves.toEqual([]);
+    expect(datasource.getResource).toHaveBeenCalledWith('schema', { stream: 'configured' });
   });
 });

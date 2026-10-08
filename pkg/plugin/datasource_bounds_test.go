@@ -149,6 +149,30 @@ func TestSearchWarnsAtDefaultLimitWhenLimitOmitted(t *testing.T) {
 	}
 }
 
+func TestTraceLimitDetectsOverflowWithoutAnAccurateTotal(t *testing.T) {
+	for _, count := range []int{maxSpansPerTrace, maxSpansPerTrace + 1} {
+		t.Run(strconv.Itoa(count), func(t *testing.T) {
+			datasource := newJSONTestDatasource(t, models.PluginSettings{}, searchHitsBody(count))
+			response := datasource.query(context.Background(), backend.DataQuery{
+				JSON: json.RawMessage(`{"queryType":"traceId","traceId":"0dbbcef1ad16147607f477bb85bae395"}`),
+			})
+			if response.Error != nil {
+				t.Fatal(response.Error)
+			}
+			frame := response.Frames[0]
+			if frame.Rows() != maxSpansPerTrace {
+				t.Fatalf("rows = %d, want %d", frame.Rows(), maxSpansPerTrace)
+			}
+			if count == maxSpansPerTrace && len(frame.Meta.Notices) != 0 {
+				t.Fatal("complete trace should not warn")
+			}
+			if count > maxSpansPerTrace && (len(frame.Meta.Notices) != 1 || !strings.Contains(frame.Meta.Notices[0].Text, "more than 5000 spans")) {
+				t.Fatalf("overflow warning missing: %+v", frame.Meta.Notices)
+			}
+		})
+	}
+}
+
 func TestTraceWarningIsAttachedToTraceAndNodeGraphFrames(t *testing.T) {
 	datasource := newJSONTestDatasource(t, models.PluginSettings{NodeGraph: true}, `{
   "hits": [

@@ -5,7 +5,7 @@ import { getDataSourceSrv } from '@grafana/runtime';
 import { ConfigEditor } from './ConfigEditor';
 import type { O2DataSourceOptions, O2SecureJsonData } from '../types';
 
-jest.mock('@grafana/runtime', () => ({ getDataSourceSrv: jest.fn() }));
+jest.mock('@grafana/runtime', () => ({ ...jest.requireActual('@grafana/runtime'), getDataSourceSrv: jest.fn() }));
 
 const getList = jest.fn();
 const getDataSourceSrvMock = jest.mocked(getDataSourceSrv);
@@ -83,9 +83,11 @@ describe('ConfigEditor settings', () => {
     render(<ConfigEditor {...props} />);
 
     const logsDatasource = screen.getByRole('combobox', { name: 'Logs datasource' });
-    expect(logsDatasource).toHaveValue('');
+    expect(logsDatasource).toHaveValue('Primary logs');
+    fireEvent.focus(logsDatasource);
     fireEvent.keyDown(logsDatasource, { key: 'ArrowDown' });
-    fireEvent.click(await screen.findByText('Secondary logs'));
+    fireEvent.keyDown(logsDatasource, { key: 'ArrowDown' });
+    fireEvent.keyDown(logsDatasource, { key: 'Enter' });
 
     await waitFor(() => expect(onOptionsChange).toHaveBeenCalled());
     expect(onOptionsChange).toHaveBeenLastCalledWith(
@@ -102,8 +104,44 @@ describe('ConfigEditor settings', () => {
 
     render(<ConfigEditor {...createProps(onOptionsChange, 'logs-missing')} />);
 
-    expect(screen.getByText('logs-missing (not found)')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('logs-missing (not found)')).toBeInTheDocument();
     expect(onOptionsChange).not.toHaveBeenCalled();
+  });
+
+  it('preserves authentication, TLS, headers and other tag mappings when changing a mapping', () => {
+    const onOptionsChange = jest.fn();
+    const props = createProps(onOptionsChange, 'logs-primary');
+    props.options.basicAuth = true;
+    props.options.basicAuthUser = 'saved-user';
+    props.options.secureJsonFields = { basicAuthPassword: true, tlsCACert: true, httpHeaderValue1: true };
+    props.options.jsonData = {
+      tlsAuthWithCACert: true,
+      tlsSkipVerify: true,
+      httpHeaderName1: 'X-Tenant',
+      tracesToLogsV2: {
+        datasourceUid: 'logs-primary',
+        tags: [
+          { key: 'service.name', value: 'service_name' },
+          { key: 'cluster', value: 'cluster_name' },
+        ],
+        query: 'saved custom query',
+      },
+    };
+    render(<ConfigEditor {...props} />);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Log label 1' }), { target: { value: 'app' } });
+    expect(onOptionsChange).toHaveBeenLastCalledWith({
+      ...props.options,
+      jsonData: {
+        ...props.options.jsonData,
+        tracesToLogsV2: {
+          ...props.options.jsonData.tracesToLogsV2,
+          tags: [
+            { key: 'service.name', value: 'app' },
+            { key: 'cluster', value: 'cluster_name' },
+          ],
+        },
+      },
+    });
   });
 });
 
