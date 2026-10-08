@@ -65,15 +65,16 @@
     "webpack-virtual-modules": "^0.6.2"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   },
   "dependencies": {
     "@emotion/css": "11.10.6",
     "@grafana/data": "13.2.3",
     "@grafana/i18n": "13.2.3",
+    "@grafana/plugin-ui": "0.17.6",
     "@grafana/runtime": "13.2.3",
-    "@grafana/ui": "13.2.3",
     "@grafana/schema": "13.2.3",
+    "@grafana/ui": "13.2.3",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },

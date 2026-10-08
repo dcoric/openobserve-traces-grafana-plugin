@@ -1,170 +1,149 @@
-# Local dev environment
+# Local development environment
 
-A docker-compose emulation of GR's production observability stack — S3 bucket
-storage, OpenObserve, OTel Collector, Grafana — with simulated trace data, so
-the plugin can be developed and validated without access to GR infrastructure.
+The Compose stack runs Grafana with this plugin, OpenObserve backed by RustFS,
+an OpenTelemetry collector, Loki, and a one-shot telemetry seed. It provides
+local trace and log correlation without access to production infrastructure.
 
-This environment provides a compose stack with RustFS-backed OpenObserve,
-repeatable multi-service trace seeding, error and large-trace scenarios,
-documented loopback ports, and exact setup commands.
+## Start and rebuild
 
-> For a hands-on walkthrough (what to click, what correct results look like),
-> see [`MANUAL-TESTING.md`](MANUAL-TESTING.md). This file is the reference.
-
-```
- dev/seed/generate-traces.mjs (one-shot "seed" service, or `npm run seed`)
-   │  OTLP/JSON  http://otel-collector:4318/v1/traces
-   ▼
- otel-collector  (otel/opentelemetry-collector-contrib:0.156.0)
-   │  OTLP/HTTP + Basic auth  http://openobserve:5080/api/default
-   ▼
- openobserve  (v0.91.2, single-node, ZO_LOCAL_MODE_STORAGE=s3)
-   │  S3 API (path-style)  http://rustfs:9000, bucket "openobserve"
-   ▼
- rustfs  (1.0.0-beta.10) ← bucket created by one-shot "rustfs-init" (minio/mc)
-
- grafana :3000 ── provisioned "OpenObserve Traces" datasource → openobserve:5080
-```
-
-## Start
+Use Node 24 (`.nvmrc`), Go 1.26.5 or newer (`go.mod`), Mage, and Docker Compose
+with support for the `!override` tag. The refresh used Node 24.21.0 and Go
+1.27.1 locally; CI reads its Go version from `go.mod`.
 
 ```bash
-npm install
-npm run build                # frontend → dist/
-mage -v build:linuxARM64     # backend for the container (Apple Silicon)
-                             # use build:linux on x86_64 hosts / CI
-npm run server               # docker compose up --build
+npm ci
+npm run build
+mage buildAll
+docker compose up --build -d
+docker wait "$(docker compose ps -aq seed)"
+docker compose logs seed
 ```
 
-Bring-up order is dependency-gated: rustfs (healthy) → rustfs-init creates the
-bucket (must complete) → openobserve (healthy) → otel-collector + grafana →
-seed runs once and exits after pushing ~200 normal traces plus one deterministic
-large trace (5,001 spans by default) spread over the last hour.
+The seed must exit successfully and print `Indexed ... complete traces and
+verified correlated Loki logs.` A successful collector POST alone is not
+readiness. CI checks the seed's exit code before browser tests.
 
-All published ports bind to `127.0.0.1` by default, including Grafana's HTTP
-and delve ports. To expose the stack to another machine, opt in explicitly:
+For a faster backend rebuild, use `mage build:linuxARM64` on Apple Silicon or
+`mage build:linux` on x86_64. Grafana mounts `dist/`; restart it after replacing
+backend binaries or changing `src/plugin.json`:
 
 ```bash
-DEV_BIND_ADDRESS=0.0.0.0 docker compose up --build
+docker compose restart grafana
 ```
 
-Security warning: `0.0.0.0` exposes unauthenticated dev Grafana and the fixed
-development OpenObserve/RustFS credentials to every reachable interface. Use
-it only on a trusted, firewalled network and prefer an SSH tunnel for remote
-access.
+`npm run dev` watches frontend files. `npm run server` runs the full Compose
+stack in the foreground. No generated `.config` files need editing.
 
-## URLs & credentials
+## Data flow and services
 
-| What                   | Where                                        | Credentials                                 |
-| ---------------------- | -------------------------------------------- | ------------------------------------------- |
-| Grafana                | http://localhost:3000                        | anonymous admin (dev image)                 |
-| Provisioned datasource | Explore → **OpenObserve Traces**             | pre-configured                              |
-| OpenObserve UI         | http://localhost:5080                        | `root@example.com` / `Complexpass#123`      |
-| OTLP from host apps    | grpc `localhost:4317`, http `localhost:4318` | none (collector)                            |
-| RustFS console         | http://localhost:9001                        | `openobserve-access` / `openobserve-secret` |
-| RustFS S3 API          | http://localhost:9000                        | same keys, path-style                       |
+The seed posts OTLP traces and logs to the collector. Traces go to OpenObserve;
+logs go to both OpenObserve and Loki's native OTLP endpoint. OpenObserve stores
+WAL/metadata locally and long-term objects in the RustFS `openobserve` bucket.
+An idempotent AWS CLI job creates that bucket when absent.
 
-Host ports used: 3000, 2345 (delve, from the Grafana dev image), 4317, 4318,
-5080, 5081, 9000, 9001.
+| Service                | Pin                                           | Host endpoint                                           |
+| ---------------------- | --------------------------------------------- | ------------------------------------------------------- |
+| Grafana                | 13.2.3 by default; override `GRAFANA_VERSION` | http://localhost:3000                                   |
+| OpenObserve            | v0.91.2                                       | http://localhost:5080; gRPC 5081                        |
+| OTel collector contrib | 0.156.0                                       | OTLP HTTP 4318; gRPC 4317                               |
+| RustFS                 | 1.0.0-beta.10                                 | S3 http://localhost:9000; console http://localhost:9001 |
+| AWS CLI                | 2.31.0                                        | Bucket bootstrap only                                   |
+| Loki                   | 3.7.0                                         | http://localhost:3100                                   |
+| Seed                   | node:24-alpine                                | One-shot container                                      |
 
-## Seeding data
+All published ports bind to loopback, including the Grafana debugger at 2345.
+`DEV_BIND_ADDRESS=0.0.0.0` explicitly exposes them to other machines. This is a
+development stack with anonymous Grafana admin access and known credentials;
+keep it on a trusted network or use an SSH tunnel.
 
-The seed service runs automatically on `up`. Re-seed any time:
+OpenObserve uses `root@example.com` / `Complexpass#123`. RustFS uses
+`openobserve-access` / `openobserve-secret`. Loki has no local authentication.
+These credentials are development fixtures, not production defaults to adopt.
+
+The provisioned **OpenObserve Traces** datasource uses
+`http://openobserve:5080`, organization `default` and trace stream `default`.
+**Local Trace Logs** uses `http://loki:3100`. Trace-to-logs maps resource tag
+`service.name` to label `service_name`, filters both trace and span IDs, and
+widens the span's time range by one minute on either side.
+
+## Seed data
 
 ```bash
-docker compose run --rm seed                       # another 200 traces, last 60 min
+docker compose run --rm seed
+SEED_RANDOM_SEED=1 npm run seed
 docker compose run --rm -e TRACE_COUNT=1000 -e TIME_SPREAD_MINUTES=360 seed
-SEED_RANDOM_SEED=1 npm run seed                    # from the host (Node >= 18)
-docker compose run --rm -e LARGE_TRACE_SPAN_COUNT=20000 seed  # bigger truncation case
-                                                   # (a 5,001-span trace is already seeded
-                                                   #  by default)
+docker compose run --rm -e LARGE_TRACE_SPAN_COUNT=20000 seed
 ```
 
-Generator knobs (env): `TRACE_COUNT` (200), `TIME_SPREAD_MINUTES` (60),
-`ERROR_RATE` (0.08), `SEED_RANDOM_SEED` (compose default 1; unset on the host
-it falls back to a random seed; `SEED` remains a
-legacy alias), `LARGE_TRACE_SPAN_COUNT` (compose default 5001; set to 0 to
-disable), and optional `REFERENCE_TIME_MS` for repeatable timestamps.
-`OTLP_HTTP_ENDPOINT` defaults to `http://localhost:4318` on the host.
-Compose-level defaults can be set via `SEED_TRACE_COUNT`,
-`SEED_TIME_SPREAD_MINUTES`, `SEED_ERROR_RATE`, `SEED_RANDOM_SEED`, and
-`LARGE_TRACE_SPAN_COUNT`. The seed logs the large trace ID and span count so it
-can be pasted into Grafana's Trace ID search.
+| Environment variable                       | Default and purpose                                                                           |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| `TRACE_COUNT`                              | 200 normal scenarios, plus any asynchronous follow-up traces                                  |
+| `TIME_SPREAD_MINUTES`                      | 60 minutes before the reference time                                                          |
+| `ERROR_RATE`                               | 0.08                                                                                          |
+| `SEED_RANDOM_SEED`                         | 1 in Compose; random on the host. `SEED` remains a legacy alias.                              |
+| `REFERENCE_TIME_MS`                        | Current epoch milliseconds. Set with the random seed for fully repeatable timestamps and IDs. |
+| `LARGE_TRACE_SPAN_COUNT`                   | 5001; set 0 to omit the large trace                                                           |
+| `OTLP_HTTP_ENDPOINT`                       | `http://localhost:4318` on the host                                                           |
+| `OPENOBSERVE_URL`, `LOKI_URL`              | Readiness endpoints, default localhost:5080 and localhost:3100                                |
+| `OPENOBSERVE_USER`, `OPENOBSERVE_PASSWORD` | Readiness authentication; local fixture credentials above                                     |
 
-Re-running the compose seed with the same fixed seed reuses trace IDs at new
-timestamps. Use a different `SEED_RANDOM_SEED`, or reset the volumes, when a
-clean one-trace-per-ID dataset matters.
+Compose accepts `SEED_TRACE_COUNT`, `SEED_TIME_SPREAD_MINUTES`, and
+`SEED_ERROR_RATE` to override the corresponding container variables.
+Pass `REFERENCE_TIME_MS` with `docker compose run -e` when needed.
 
-The simulated system is a small shop with eight resource services:
-`web-frontend → api-gateway → product/cart/user/payment/inventory services`,
-plus an async `order-processor` whose traces **link** back to the checkout
-trace's PRODUCER span. Database and cache CLIENT spans remain children of the
-calling resource service; their `net.peer.name` values identify postgres or
-redis endpoints, which are not emitted as fake resource services. ~8% of
-traces fail with ERROR status + `exception` events. This exercises the
-waterfall, node graph, span logs (events), references (links), kind icons, and
-search filters. The large-trace scenario reuses `product-service` and
-marks every span with `dev.scenario=large-trace`.
+The random seed determines the scenario structure. Trace IDs also incorporate
+the reference timestamp, so ordinary reruns get new IDs. Repeating both the
+seed and reference timestamp reuses the same IDs and can duplicate ingested
+rows; use a fresh dataset when reproducing that exact payload.
 
-Keep `TIME_SPREAD_MINUTES` well below o2's backdated-ingest window
-(`ZO_INGEST_ALLOWED_UPTO`, set to 24h in compose; o2 default is 5h) — spans
-older than the window are **silently dropped** (the rejection is only visible
-in collector logs, not to the seed script).
+The simulated shop has web, API, product, cart, user, payment, inventory and
+asynchronous order-processing services. It includes error status, exception
+events, parent-child spans and links back to producing traces. Every span
+emits a log containing its trace and span IDs. The large trace is tagged
+`dev.scenario=large-trace` (stored as `dev_scenario` in OpenObserve).
 
-## Verifying the S3 leg
+The seed waits up to two minutes for the exact span count of every generated
+trace and for correlated Loki logs. Keep the spread within OpenObserve's
+24-hour local ingest allowance. Collector delivery failures, duplicate rows,
+or rejected old spans cause readiness to fail rather than silently passing CI.
 
-o2 serves fresh data from its local WAL; Parquet lands in the bucket only
-after `ZO_MAX_FILE_RETENTION_TIME` (set to 60s in compose; default 600s). An
-empty bucket in the first minute is **not** a misconfiguration. To check:
+## Checks and troubleshooting
 
 ```bash
-# objects present?
-docker compose run --rm --entrypoint /bin/sh rustfs-init -c \
-  'mc alias set rustfs http://rustfs:9000 openobserve-access openobserve-secret >/dev/null \
-   && mc ls --recursive rustfs/openobserve | head'
-
-# any storage errors in o2?
-docker compose logs openobserve | grep -iE 's3|storage' | grep -iE 'error|fail'
-
-# force reads from S3 (not memtable): restart o2, then re-query an old trace
-docker compose restart openobserve
+npm run typecheck
+npm run lint
+npm run test:ci
+node --test dev/seed/*.test.mjs
+go test -race ./pkg/...
+npm run e2e
 ```
 
-## Reset / wipe
+For the click-by-click checks, see [MANUAL-TESTING.md](MANUAL-TESTING.md).
+For dated evidence and deployment prerequisites, see [VALIDATION.md](VALIDATION.md).
+
+- If the plugin does not load, rebuild the backend for the container's
+  architecture and restart Grafana. Check `docker compose logs grafana`.
+- If seeding fails, inspect `docker compose logs seed otel-collector openobserve loki`.
+  OpenObserve's HTTP exporter endpoint must end in `/api/default` without a
+  trailing slash; Loki's endpoint is `/otlp`. The collector appends `/v1/logs`
+  or `/v1/traces` as appropriate.
+- If Explore has no data after a successful seed, select **Last 1 hour** or
+  the window containing the recorded reference timestamp.
+- If logs are absent, verify the logs datasource, `service.name` mapping, ID
+  filters and the log retention window. The local setup uses Loki; other logs
+  plugins need their own Grafana trace-link support.
+- If images cannot be pulled, retry the registry request before changing a
+  version pin. AWS CLI replaced the unavailable public `minio/mc` image.
+
+OpenObserve flushes objects to S3 after its local WAL interval (60 seconds in
+this stack). To inspect stored objects:
 
 ```bash
-docker compose down              # stop, keep data
-docker compose down -v           # stop and WIPE rustfs + openobserve volumes
+docker compose run --rm --entrypoint aws rustfs-init \
+  --endpoint-url http://rustfs:9000 s3api list-objects-v2 \
+  --bucket openobserve --max-items 10
 ```
 
-## Pinned versions (bump deliberately)
-
-| Image                                           | Why this pin                                                                                                                                                   |
-| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `public.ecr.aws/zinclabs/openobserve:v0.91.2`   | Latest stable at pin time (2026-07-17). Env vars/routes used here verified against this tag's source. Re-pin to the deployment's exact version before rollout. |
-| `rustfs/rustfs:1.0.0-beta.10`                   | Latest beta at pin time — RustFS is beta with fast release churn; record the digest after first pull if reproducibility matters.                               |
-| `otel/opentelemetry-collector-contrib:0.156.0`  | Latest stable contrib release at pin time.                                                                                                                     |
-| `minio/mc:RELEASE.2025-08-13T08-35-41Z`         | Bucket bootstrap only (`mc mb -p` is idempotent).                                                                                                              |
-| Grafana (via `GRAFANA_VERSION`, default 13.0.2) | From `.config/docker-compose-base.yaml`.                                                                                                                       |
-
-## Troubleshooting
-
-- **Plugin fails to load in Grafana** — the backend binary for the container's
-  architecture must exist in `dist/` (`gpx_openobserve_traces_linux_arm64` on
-  Apple Silicon, `..._linux_amd64` on x86_64). Run the matching `mage
-build:...` target. Changing `plugin.json` requires a Grafana restart.
-- **No traces in Grafana but seed said "Done"** — check collector logs
-  (`docker compose logs otel-collector`) for 4xx from o2: auth header, or the
-  endpoint having a trailing slash (must be `/api/default`, the exporter
-  appends `/v1/traces`). Also confirm the time range in Grafana covers the
-  seeded window.
-- **o2 can't write to the bucket** — confirm `rustfs-init` completed
-  (`docker compose ps -a`), then look for upload errors in o2 logs. Break-glass
-  options, in order: set `ZO_S3_FEATURE_HTTP1_ONLY=true` on o2; try
-  `ZO_S3_PROVIDER=s3` instead of `minio`; swap the `rustfs` service for
-  `minio/minio` (RustFS is beta — o2↔RustFS has no prior art; this stack is
-  the first exercise of it, by design).
-- **Seed spans partially missing** — spread exceeded the ingest window; see
-  "Seeding data" above.
-- **gRPC ingest** (if you point an app at o2:5081 directly) — requires the
-  `organization: default` metadata header; HTTP ingest must NOT set it.
+`docker compose down` stops the stack and keeps data. Only use
+`docker compose down -v` when you intend to delete all RustFS, OpenObserve and
+Loki data volumes.

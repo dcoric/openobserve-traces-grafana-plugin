@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * Trace simulation generator for the local dev stack.
+ * Trace and log simulation generator for the local dev stack.
  *
  * Emits realistic multi-service traces as OTLP/JSON over HTTP to the OTel
- * Collector (which forwards them to OpenObserve). No npm dependencies — runs
- * with plain Node >= 18 (global fetch), so it works both from the host and as
- * a one-shot `node:22-alpine` compose service.
+ * Collector (which forwards traces to OpenObserve and logs to OpenObserve
+ * and Loki). No npm dependencies; runs with Node 24 from the host or as
+ * a one-shot `node:24-alpine` compose service.
  *
  * Environment:
  *   OTLP_HTTP_ENDPOINT  collector OTLP/HTTP base URL (default http://localhost:4318)
@@ -22,11 +22,14 @@
  *   TRACE_COUNT=1000 TIME_SPREAD_MINUTES=360 node dev/seed/generate-traces.mjs
  *
  * NOTE on TIME_SPREAD_MINUTES: OpenObserve silently drops spans older than
- * ZO_INGEST_ALLOWED_UPTO hours (default 5) — and because this script posts to
- * the collector, o2's rejection response never reaches it, so drops are
- * invisible here. docker-compose.yaml sets ZO_INGEST_ALLOWED_UPTO=24; keep the
+ * ZO_INGEST_ALLOWED_UPTO hours (default 5). The collector accepts requests
+ * before delivery, so the subsequent indexing check detects missing spans.
+ * Compose sets ZO_INGEST_ALLOWED_UPTO=24; keep the
  * spread comfortably below that (or below ~270 min against a default o2).
  */
+
+import { createHash } from 'node:crypto';
+import { tracePayloadToLogs, waitForIndexedData } from './telemetry.mjs';
 
 const OTLP_HTTP_ENDPOINT = process.env.OTLP_HTTP_ENDPOINT ?? 'http://localhost:4318';
 const TRACE_COUNT = intEnv('TRACE_COUNT', 200);
@@ -71,7 +74,11 @@ function hexId(bytes) {
   }
   return s;
 }
-const newTraceId = () => hexId(16);
+const newTraceId = () =>
+  createHash('sha256')
+    .update(`${REFERENCE_TIME_MS}:${hexId(16)}`)
+    .digest('hex')
+    .slice(0, 32);
 const newSpanId = () => hexId(8);
 
 // ---------------------------------------------------------------------------
@@ -318,7 +325,13 @@ function checkout(startMs, fail) {
     parent: gw,
     startOffsetMs: total * 0.08,
     durationMs: total * 0.84,
-    attrs: { 'rpc.system': 'grpc', 'rpc.service': 'CartService', 'rpc.method': 'Checkout', 'order.id': orderId, 'cart.items': Math.floor(randBetween(1, 8)) },
+    attrs: {
+      'rpc.system': 'grpc',
+      'rpc.service': 'CartService',
+      'rpc.method': 'Checkout',
+      'order.id': orderId,
+      'cart.items': Math.floor(randBetween(1, 8)),
+    },
     error: fail ? 'PaymentDeclined: card_declined' : undefined,
   });
 
@@ -338,7 +351,12 @@ function checkout(startMs, fail) {
     parent: cart,
     startOffsetMs: total * 0.2,
     durationMs: total * 0.5,
-    attrs: { 'rpc.system': 'grpc', 'payment.amount': Math.round(randBetween(10, 500) * 100) / 100, 'payment.currency': 'GBP', 'order.id': orderId },
+    attrs: {
+      'rpc.system': 'grpc',
+      'payment.amount': Math.round(randBetween(10, 500) * 100) / 100,
+      'payment.currency': 'GBP',
+      'order.id': orderId,
+    },
     error: fail ? 'card_declined' : undefined,
     events: fail ? [exceptionEvent(total * 0.55, t, 'PaymentDeclined', 'card_declined: insufficient funds')] : [],
   });
@@ -349,7 +367,12 @@ function checkout(startMs, fail) {
     parent: pay,
     startOffsetMs: total * 0.25,
     durationMs: total * 0.4,
-    attrs: { 'http.method': 'POST', 'http.url': 'https://psp.example.com/v1/charges', 'http.status_code': fail ? 402 : 200, 'peer.service': 'psp.example.com' },
+    attrs: {
+      'http.method': 'POST',
+      'http.url': 'https://psp.example.com/v1/charges',
+      'http.status_code': fail ? 402 : 200,
+      'peer.service': 'psp.example.com',
+    },
     error: fail ? 'HTTP 402' : undefined,
   });
 
@@ -379,7 +402,12 @@ function checkout(startMs, fail) {
       parent: cart,
       startOffsetMs: total * 0.8,
       durationMs: randBetween(2, 10),
-      attrs: { 'messaging.system': 'kafka', 'messaging.destination.name': 'orders', 'messaging.operation': 'publish', 'order.id': orderId },
+      attrs: {
+        'messaging.system': 'kafka',
+        'messaging.destination.name': 'orders',
+        'messaging.operation': 'publish',
+        'order.id': orderId,
+      },
     });
     t.producedMessage = { traceId: t.traceId, spanId: producer.spanId, orderId, publishedAtMs: startMs + total * 0.8 };
   }
@@ -398,7 +426,12 @@ function orderProcessing(msg) {
     kind: SpanKind.CONSUMER,
     startOffsetMs: 0,
     durationMs: total,
-    attrs: { 'messaging.system': 'kafka', 'messaging.destination.name': 'orders', 'messaging.operation': 'process', 'order.id': msg.orderId },
+    attrs: {
+      'messaging.system': 'kafka',
+      'messaging.destination.name': 'orders',
+      'messaging.operation': 'process',
+      'order.id': msg.orderId,
+    },
     links: [{ traceId: msg.traceId, spanId: msg.spanId, attributes: toAttrs({ 'messaging.operation': 'publish' }) }],
   });
   dbSpan(t, consume, {
@@ -540,21 +573,22 @@ function tracesToOtlpPayload(traces) {
   };
 }
 
-async function postBatch(payload, attempt = 1) {
-  const url = `${OTLP_HTTP_ENDPOINT.replace(/\/$/, '')}/v1/traces`;
+async function postBatch(payload, signal, attempt = 1) {
+  const url = `${OTLP_HTTP_ENDPOINT.replace(/\/$/, '')}/v1/${signal}`;
   try {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(15_000),
     });
     const body = await res.text();
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}: ${body.slice(0, 300)}`);
     }
     const parsed = body ? JSON.parse(body) : {};
-    if (parsed.partialSuccess?.rejectedSpans) {
-      console.warn(`partial success: ${parsed.partialSuccess.rejectedSpans} spans rejected — ${parsed.partialSuccess.errorMessage}`);
+    if (Number(parsed.partialSuccess?.rejectedSpans ?? parsed.partialSuccess?.rejectedLogRecords ?? 0) > 0) {
+      throw new Error(`Rejected ${signal}: ${parsed.partialSuccess.errorMessage}`);
     }
   } catch (err) {
     if (attempt >= 5) {
@@ -563,12 +597,14 @@ async function postBatch(payload, attempt = 1) {
     const backoffMs = 1000 * attempt;
     console.warn(`POST ${url} failed (${err.message ?? err}), retry ${attempt}/4 in ${backoffMs}ms`);
     await new Promise((resolve) => setTimeout(resolve, backoffMs));
-    return postBatch(payload, attempt + 1);
+    return postBatch(payload, signal, attempt + 1);
   }
 }
 
 async function main() {
-  console.log(`Generating ${TRACE_COUNT} traces over the last ${TIME_SPREAD_MINUTES} min (seed=${SEED}, errorRate=${ERROR_RATE})`);
+  console.log(
+    `Generating ${TRACE_COUNT} traces over the last ${TIME_SPREAD_MINUTES} min (seed=${SEED}, errorRate=${ERROR_RATE})`
+  );
   console.log(`OTLP/HTTP endpoint: ${OTLP_HTTP_ENDPOINT}`);
 
   const spreadMs = TIME_SPREAD_MINUTES * 60 * 1000;
@@ -597,17 +633,22 @@ async function main() {
   let sent = 0;
   for (let i = 0; i < traces.length; i += BATCH_SIZE) {
     const batch = traces.slice(i, i + BATCH_SIZE);
-    await postBatch(tracesToOtlpPayload(batch));
+    const payload = tracesToOtlpPayload(batch);
+    await postBatch(payload, 'traces');
+    await postBatch(tracePayloadToLogs(payload), 'logs');
     sent += batch.length;
     console.log(`  sent ${sent}/${traces.length} traces`);
   }
 
   const spanCount = traces.reduce((s, t) => s + t.spans.length, 0);
-  console.log(`Done: ${traces.length} traces, ${spanCount} spans (incl. ${pendingMessages.length} async order-processing traces with links).`);
+  console.log(
+    `Done: ${traces.length} traces, ${spanCount} spans (incl. ${pendingMessages.length} async order-processing traces with links).`
+  );
   console.log(`Example trace id: ${traces[0]?.traceId ?? 'none'}`);
   if (largeTraceId) {
     console.log(`Large trace: traceId=${largeTraceId} spans=${LARGE_TRACE_SPAN_COUNT} scenario=large-trace`);
   }
+  await waitForIndexedData(traces);
 }
 
 main().catch((err) => {

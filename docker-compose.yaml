@@ -125,6 +125,8 @@ services:
     depends_on:
       openobserve:
         condition: service_healthy
+      loki:
+        condition: service_started
     volumes:
       - ./dev/otel-collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro
     ports:
@@ -142,7 +144,7 @@ services:
   # One-shot simulated-data seeder. Re-run any time with:
   #   docker compose run --rm seed          (or `npm run seed` from the host)
   seed:
-    image: node:22-alpine
+    image: node:24-alpine
     depends_on:
       openobserve:
         condition: service_healthy
@@ -150,6 +152,8 @@ services:
         condition: service_started
     environment:
       OTLP_HTTP_ENDPOINT: http://otel-collector:4318
+      OPENOBSERVE_URL: http://openobserve:5080
+      LOKI_URL: http://loki:3100
       TRACE_COUNT: ${SEED_TRACE_COUNT:-200}
       TIME_SPREAD_MINUTES: ${SEED_TIME_SPREAD_MINUTES:-60}
       ERROR_RATE: ${SEED_ERROR_RATE:-0.08}
@@ -160,6 +164,19 @@ services:
     command: ['node', '/seed/generate-traces.mjs']
     restart: 'no'
 
+  loki:
+    image: grafana/loki:3.7.0
+    command: ['-config.file=/etc/loki/local.yaml']
+    ports:
+      - target: 3100
+        published: '3100'
+        host_ip: *dev-bind-address
+        protocol: tcp
+    volumes:
+      - ./dev/loki/config.yaml:/etc/loki/local.yaml:ro
+      - loki-data:/loki
+
 volumes:
   rustfs-data:
   openobserve-data:
+  loki-data:
