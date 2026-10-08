@@ -1,39 +1,48 @@
 # OpenObserve Traces
 
-OpenObserve Traces is a Grafana backend data source that renders OpenObserve
-trace data in Grafana's native trace view. It is intended for Grafana 12+
-deployments with an OpenObserve HTTP API.
+Query OpenObserve traces in Grafana 12+ and inspect them in the native trace
+waterfall, span details and optional node graph.
 
 ## Configure
 
-1. Add the **OpenObserve Traces** data source.
-2. Set the OpenObserve base URL, organization (default `default`), and the
-   HTTP authentication required by the deployment.
-3. Optionally choose a default traces stream and enable node graph output.
-4. Optionally select a logs data source and configure trace/span ID filters for
-   Trace-to-logs links.
+1. Set the OpenObserve base URL reachable from the Grafana server.
+2. Choose the HTTP authentication and TLS settings required by your deployment.
+   Passwords, TLS material and custom header values use secure fields.
+3. Set the organization and default traces stream, commonly `default`.
+4. Optionally enable node graph output and select a supported logs datasource.
+5. Click **Save & test** and confirm **Connected to OpenObserve**.
 
-## Query features
+## Search and drill down
 
-- Structured trace search by service, span name, duration, status, and tags.
-- Strict trace-ID lookup with a native Grafana waterfall.
-- Optional node-graph frames, span events, links, tags, and resource fields.
-- Stream discovery through the data source resource API.
+Search by service, operation, error status, duration and attributes. Attribute
+suggestions come from the stream schema; custom names are also accepted.
+Durations accept values such as `100us`, `1.5ms`, `2s`, bare microseconds, and
+template variables. Click a result's trace ID to open the native waterfall,
+or enter a known ID directly.
 
-Search has no raw SQL escape hatch and rejects requests above 500 traces; a
-search page that fills the requested limit carries a visible "more may match"
-warning. A trace lookup is capped at 5,000 spans and exposes a warning when
-OpenObserve reports more spans than were returned. These limits are explicit;
-pagination and unlimited trace retrieval are not provided.
+Search defaults to 50 traces and caps at 500. Full result pages warn that more
+may match. Trace lookup widens the selected time range by five minutes on each
+side, renders up to 5,000 spans and warns when an extra fetched row proves the
+trace is larger. Pagination and raw SQL input are not available.
 
-## Development and support status
+## Trace to logs
 
-Current validation status is maintained in the repository's
-`docs/VALIDATION.md` — consult it before treating any build as
-production-accepted. Settled evidence: the local OpenObserve v0.91.2
-validation confirmed the original field mappings. Known stable pendings:
-schema-driven resource tags, Trace-to-logs end-to-end verification, and
-migration from deprecated Grafana HTTP/Select components.
+Select a logs datasource, map resource attributes to its labels, and configure
+time shifts and trace/span ID filters. For Loki, map `service.name` to
+`service_name`. The plugin emits the canonical resource tag needed for this
+mapping. The local example includes emitted logs and verified native span-to-log
+navigation; production mappings must match your own log data.
 
-See the repository README and `docs/DEV-ENVIRONMENT.md` for development setup,
-seed controls, and loopback port defaults.
+## Compatibility and support
+
+The refresh was tested locally with OpenObserve v0.91.2 and Grafana 12.0.0,
+13.0.10 and 13.2.3. CI tests additional supported versions and nightly.
+Resource/span attribute classification still uses prefixes. Grafana Explore
+may scroll horizontally at phone widths.
+
+See the [repository](https://github.com/dcoric/openobserve-traces-grafana-plugin),
+[setup instructions](https://github.com/dcoric/openobserve-traces-grafana-plugin/blob/main/docs/DEV-ENVIRONMENT.md),
+[validation record](https://github.com/dcoric/openobserve-traces-grafana-plugin/blob/main/docs/VALIDATION.md),
+and [issue tracker](https://github.com/dcoric/openobserve-traces-grafana-plugin/issues).
+Local runtime validation does not establish production signing or deployment
+acceptance. Restart Grafana after installing or updating the plugin.

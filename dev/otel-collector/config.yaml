@@ -25,6 +25,8 @@ processors:
   batch: {}
 
 exporters:
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
   otlphttp/openobserve:
     endpoint: http://openobserve:5080/api/default
     headers:
@@ -48,10 +50,7 @@ service:
       receivers: [otlp]
       processors: [batch]
       exporters: [otlphttp/openobserve]
-    # Logs pipeline reserved for the trace-to-logs work (IMPLEMENT_PLAN
-    # Phase 3): the seed script does not emit logs yet, but any OTLP logs
-    # sent to this collector already land in o2's "default" logs stream.
     logs:
       receivers: [otlp]
       processors: [batch]
-      exporters: [otlphttp/openobserve]
+      exporters: [otlphttp/openobserve, otlphttp/loki]

@@ -17,8 +17,19 @@
       "small": "img/logo.svg",
       "large": "img/logo.svg"
     },
-    "links": [],
-    "screenshots": [],
+    "links": [
+      { "name": "Source", "url": "https://github.com/dcoric/openobserve-traces-grafana-plugin" },
+      {
+        "name": "Documentation",
+        "url": "https://github.com/dcoric/openobserve-traces-grafana-plugin/blob/main/README.md"
+      },
+      { "name": "Issues", "url": "https://github.com/dcoric/openobserve-traces-grafana-plugin/issues" }
+    ],
+    "screenshots": [
+      { "name": "Structured trace search with seeded OpenObserve data", "path": "img/trace-search.png" },
+      { "name": "Native Grafana waterfall with error spans", "path": "img/trace-waterfall.png" },
+      { "name": "Span details, resource attributes and exception events", "path": "img/span-details.png" }
+    ],
     "version": "%VERSION%",
     "updated": "%TODAY%"
   },
