@@ -18,7 +18,7 @@
   "license": "Apache-2.0",
   "devDependencies": {
     "@grafana/eslint-config": "^9.0.0",
-    "@grafana/plugin-e2e": "^3.14.0",
+    "@grafana/plugin-e2e": "^3.15.3",
     "@grafana/sign-plugin": "^3.2.2",
     "@grafana/tsconfig": "^2.0.1",
     "@playwright/test": "^1.63.0",
@@ -69,14 +69,14 @@
   },
   "dependencies": {
     "@emotion/css": "11.10.6",
-    "@grafana/data": "13.2.3",
-    "@grafana/i18n": "13.2.3",
-    "@grafana/plugin-ui": "0.17.6",
-    "@grafana/runtime": "13.2.3",
-    "@grafana/schema": "13.2.3",
-    "@grafana/ui": "13.2.3",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "@grafana/data": "13.2.4",
+    "@grafana/i18n": "13.2.4",
+    "@grafana/plugin-ui": "0.17.8",
+    "@grafana/runtime": "13.2.4",
+    "@grafana/schema": "13.2.4",
+    "@grafana/ui": "13.2.4",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
   },
   "packageManager": "npm@11.11.0"
 }
