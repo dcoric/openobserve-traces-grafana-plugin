@@ -69,14 +69,14 @@
   },
   "dependencies": {
     "@emotion/css": "11.10.6",
-    "@grafana/data": "13.2.3",
-    "@grafana/i18n": "13.2.3",
-    "@grafana/plugin-ui": "0.17.6",
-    "@grafana/runtime": "13.2.3",
-    "@grafana/schema": "13.2.3",
-    "@grafana/ui": "13.2.3",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "@grafana/data": "13.3.0",
+    "@grafana/i18n": "13.3.0",
+    "@grafana/plugin-ui": "0.17.9",
+    "@grafana/runtime": "13.3.0",
+    "@grafana/schema": "13.3.0",
+    "@grafana/ui": "13.3.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
   },
   "packageManager": "npm@11.11.0"
 }
